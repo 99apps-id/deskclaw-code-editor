@@ -380,35 +380,75 @@ export function AgentChatPanel({ onClose }: { onClose?: () => void }) {
           </div>
         ) : (
           <div>
-            {messages.map((message) => (
-              <article key={message.id} className={`vscode-chat__message px-3 py-3 ${message.role === 'user' ? 'vscode-chat__request' : 'vscode-chat__response'}`}>
-                <div className="vscode-chat__message-label mb-2 flex items-center gap-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--color-ink-2)]">
-                  {message.role === 'user' ? <CircleUserRound className="h-3.5 w-3.5" /> : <Braces className="h-3.5 w-3.5" />}
-                  {message.role === 'user' ? 'You' : 'OpenClaw Agent'}
-                </div>
-                {message.attachments?.length ? (
-                  <div className="mb-2 flex flex-wrap gap-1">
-                    {message.attachments.map((name) => <span key={name} className="rounded-[var(--radius-control)] bg-[var(--color-paper-3)] px-1.5 py-0.5 text-[10px]">{name}</span>)}
+            {messages.map((message) => {
+              const isUser = message.role === 'user'
+              return (
+                <article
+                  key={message.id}
+                  className={`vscode-chat__message my-2.5 mx-2 p-3 rounded-lg transition-colors ${
+                    isUser
+                      ? 'border border-[var(--color-accent-strong)]/30 bg-[var(--color-accent)]/15 text-[var(--color-ink)]'
+                      : 'border-l-3 border-l-[var(--color-accent-strong)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] text-[var(--color-ink)]'
+                  }`}
+                >
+                  <div
+                    className={`vscode-chat__message-label mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider ${
+                      isUser ? 'text-[var(--color-accent-strong)]' : 'text-[var(--color-ink)]'
+                    }`}
+                  >
+                    {isUser ? (
+                      <CircleUserRound className="h-3.5 w-3.5 text-[var(--color-accent-strong)]" />
+                    ) : (
+                      <Braces className="h-3.5 w-3.5 text-[var(--color-accent-strong)]" />
+                    )}
+                    <span>{isUser ? 'You' : 'OpenClaw Agent'}</span>
                   </div>
-                ) : null}
-                {message.role === 'assistant' ? (
-                  message.content
-                    ? <div className="vscode-chat__markdown max-w-none text-xs leading-5"><ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown>{message.streaming && <span className="vscode-chat__caret ml-1 inline-block h-3 w-1 bg-[var(--color-accent-strong)]" />}</div>
-                    : <div className="vscode-chat__progress flex items-center gap-2 text-xs text-[var(--color-ink-2)]"><span className="agent-status__pulse" /><AnimatedStatus phase={phase} /></div>
-                ) : <p className="whitespace-pre-wrap text-xs leading-5">{message.content}</p>}
-                {message.actions?.length ? (
-                  <div className="mt-2 space-y-1">
-                    {message.actions.filter((action) => action.message || action.filePath).map((action, index) => (
-                      <div key={`${action.timestamp}-${index}`} className="flex items-center gap-2 border-l border-[var(--color-rule)] py-1 pl-2 text-[11px] text-[var(--color-ink-2)]">
-                        {action.type === 'exec' || action.type === 'command' ? <TerminalSquare className="h-3.5 w-3.5" /> : action.type === 'search' ? <SearchCode className="h-3.5 w-3.5" /> : <FileText className="h-3.5 w-3.5" />}
-                        <span className="truncate">{action.message || action.filePath || action.type}</span>
+                  {message.attachments?.length ? (
+                    <div className="mb-2 flex flex-wrap gap-1">
+                      {message.attachments.map((name) => (
+                        <span key={name} className="rounded-[var(--radius-control)] bg-[var(--color-paper-3)] px-1.5 py-0.5 text-[10px] font-mono">
+                          {name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
+                  {message.role === 'assistant' ? (
+                    message.content ? (
+                      <div className="vscode-chat__markdown max-w-none text-xs leading-5">
+                        <ReactMarkdown components={{ code: CodeBlock }}>{message.content}</ReactMarkdown>
+                        {message.streaming && <span className="vscode-chat__caret ml-1 inline-block h-3 w-1 bg-[var(--color-accent-strong)]" />}
                       </div>
-                    ))}
-                  </div>
-                ) : null}
-                {message.editSummary ? <div className="mt-2 text-[11px] font-medium text-[var(--color-ink-2)]">{message.editSummary}</div> : null}
-              </article>
-            ))}
+                    ) : (
+                      <div className="vscode-chat__progress flex items-center gap-2 text-xs text-[var(--color-ink-2)]">
+                        <span className="agent-status__pulse" />
+                        <AnimatedStatus phase={phase} />
+                      </div>
+                    )
+                  ) : (
+                    <p className="whitespace-pre-wrap text-xs leading-5 font-medium">{message.content}</p>
+                  )}
+                  {message.actions?.length ? (
+                    <div className="mt-2 space-y-1">
+                      {message.actions
+                        .filter((action) => action.message || action.filePath)
+                        .map((action, index) => (
+                          <div key={`${action.timestamp}-${index}`} className="flex items-center gap-2 border-l border-[var(--color-rule)] py-1 pl-2 text-[11px] text-[var(--color-ink-2)]">
+                            {action.type === 'exec' || action.type === 'command' ? (
+                              <TerminalSquare className="h-3.5 w-3.5" />
+                            ) : action.type === 'search' ? (
+                              <SearchCode className="h-3.5 w-3.5" />
+                            ) : (
+                              <FileText className="h-3.5 w-3.5" />
+                            )}
+                            <span className="truncate">{action.message || action.filePath || action.type}</span>
+                          </div>
+                        ))}
+                    </div>
+                  ) : null}
+                  {message.editSummary ? <div className="mt-2 text-[11px] font-medium text-[var(--color-ink-2)]">{message.editSummary}</div> : null}
+                </article>
+              )
+            })}
             <div ref={endRef} />
           </div>
         )}
@@ -444,46 +484,57 @@ export function AgentChatPanel({ onClose }: { onClose?: () => void }) {
             placeholder="Ask about the workspace or request a change…"
             className="vscode-chat__input w-full resize-none overflow-y-auto border-0! bg-transparent! px-3 py-2 text-xs outline-none!"
           />
-          <div className="flex h-8 items-center gap-1 border-t border-[var(--color-rule)] px-1">
-            <button type="button" onClick={() => void attachActiveFile()} className="flex h-6 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)]" title="Attach active file">
-              <FileCode2 className="h-3.5 w-3.5 text-[var(--color-accent-strong)]" /> + Active file
-            </button>
-            <button type="button" onClick={() => void attachSelection()} className="flex h-6 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)]" title="Attach selected code in editor">
-              <TextSelect className="h-3.5 w-3.5 text-[var(--color-warning)]" /> + Selection
-            </button>
-            <button type="button" onClick={() => void pickContext()} className="flex h-6 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)]" title="Add files">
-              <Paperclip className="h-3.5 w-3.5" /> Add context
-            </button>
-            <div className="relative">
-              <button type="button" onClick={() => setPolicyOpen((value) => !value)} className={`flex h-6 items-center gap-1 px-1.5 text-[10px] ${policy === 'full-access' ? 'text-[var(--color-warning)]' : 'text-[var(--color-ink-2)]'}`}>
-                {policy === 'ask' ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
-                {policy === 'ask' ? 'Ask approval' : 'Full access'}
-                <ChevronDown className="h-3 w-3" />
+          <div className="flex flex-col border-t border-[var(--color-rule)] p-1.5 gap-1.5">
+            {/* Context attachment buttons (scrollable horizontally if needed) */}
+            <div className="flex items-center gap-1 overflow-x-auto workbench-scroll pb-0.5 min-w-0">
+              <button type="button" onClick={() => void attachActiveFile()} className="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)] rounded" title="Attach active file">
+                <FileCode2 className="h-3.5 w-3.5 text-[var(--color-accent-strong)]" /> + Active file
               </button>
-              {policyOpen && (
-                <div className="absolute bottom-full left-0 z-30 mb-1 w-64 rounded-[var(--radius-panel)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-1 shadow-xl">
-                  <button type="button" onClick={() => { setPolicy('ask'); setPolicyOpen(false) }} className="w-full p-2 text-left hover:bg-[var(--color-paper-3)]"><strong className="block text-xs">Ask approval</strong><span className="text-[10px] text-[var(--color-ink-2)]">Review file changes and important actions.</span></button>
-                  <button type="button" onClick={() => { setPolicy('full-access'); setPolicyOpen(false) }} className="w-full p-2 text-left hover:bg-[var(--color-paper-3)]"><strong className="block text-xs text-[var(--color-warning)]">Full access</strong><span className="text-[10px] text-[var(--color-ink-2)]">Allow workspace writes and commands for this chat.</span></button>
-                </div>
-              )}
-            </div>
-            <div className="relative min-w-0">
-              <button type="button" onClick={() => setModelOpen((value) => !value)} className="flex h-6 max-w-40 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)]">
-                <Braces className="h-3.5 w-3.5" /><span className="truncate">{model || 'Choose model'}</span><ChevronDown className="h-3 w-3 shrink-0" />
+              <button type="button" onClick={() => void attachSelection()} className="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)] rounded" title="Attach selected code in editor">
+                <TextSelect className="h-3.5 w-3.5 text-[var(--color-warning)]" /> + Selection
               </button>
-              {modelOpen && (
-                <div className="absolute bottom-full left-0 z-30 mb-1 max-h-72 w-72 overflow-auto rounded-[var(--radius-panel)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-1 shadow-xl">
-                  {models.map((item) => (
-                    <button type="button" key={item.id} onClick={() => { setModel(item.id); setModelOpen(false) }} className={`flex w-full items-center gap-2 p-2 text-left text-xs hover:bg-[var(--color-paper-3)] ${model === item.id ? 'text-[var(--color-accent-strong)]' : ''}`}>
-                      <span className="min-w-0 flex-1 truncate">{item.name || item.id}</span><span className="text-[10px] text-[var(--color-ink-2)]">{item.provider}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
+              <button type="button" onClick={() => void pickContext()} className="flex h-6 shrink-0 items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)] rounded" title="Add files">
+                <Paperclip className="h-3.5 w-3.5" /> Add context
+              </button>
             </div>
-            <button type="button" onClick={() => void sendMessage()} disabled={sending || !input.trim()} className="chat-send-button ml-auto grid h-7 w-7 place-items-center rounded-[7px] bg-[var(--color-accent-strong)] text-white disabled:opacity-40" title="Send">
-              {sending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-4 w-4" strokeWidth={2.4} />}
-            </button>
+
+            {/* Model Selector, Policy & Send Button (Always visible on bottom row) */}
+            <div className="flex items-center justify-between gap-1 pt-1 border-t border-[var(--color-rule)]/50">
+              <div className="flex items-center gap-1 min-w-0 flex-1">
+                <div className="relative min-w-0 flex-1 max-w-[180px]">
+                  <button type="button" onClick={() => setModelOpen((value) => !value)} className="flex h-6 w-full items-center gap-1 px-1.5 text-[10px] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-3)] rounded">
+                    <Braces className="h-3.5 w-3.5 shrink-0" /><span className="truncate">{model || 'Choose model'}</span><ChevronDown className="h-3 w-3 shrink-0" />
+                  </button>
+                  {modelOpen && (
+                    <div className="absolute bottom-full left-0 z-30 mb-1 max-h-72 w-72 overflow-auto rounded-[var(--radius-panel)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-1 shadow-xl">
+                      {models.map((item) => (
+                        <button type="button" key={item.id} onClick={() => { setModel(item.id); setModelOpen(false) }} className={`flex w-full items-center gap-2 p-2 text-left text-xs hover:bg-[var(--color-paper-3)] ${model === item.id ? 'text-[var(--color-accent-strong)]' : ''}`}>
+                          <span className="min-w-0 flex-1 truncate">{item.name || item.id}</span><span className="text-[10px] text-[var(--color-ink-2)]">{item.provider}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="relative shrink-0">
+                  <button type="button" onClick={() => setPolicyOpen((value) => !value)} className={`flex h-6 items-center gap-1 px-1.5 text-[10px] rounded hover:bg-[var(--color-paper-3)] ${policy === 'full-access' ? 'text-[var(--color-warning)]' : 'text-[var(--color-ink-2)]'}`}>
+                    {policy === 'ask' ? <ShieldCheck className="h-3.5 w-3.5" /> : <ShieldAlert className="h-3.5 w-3.5" />}
+                    <span className="hidden sm:inline">{policy === 'ask' ? 'Ask approval' : 'Full access'}</span>
+                    <ChevronDown className="h-3 w-3" />
+                  </button>
+                  {policyOpen && (
+                    <div className="absolute bottom-full left-0 z-30 mb-1 w-64 rounded-[var(--radius-panel)] border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-1 shadow-xl">
+                      <button type="button" onClick={() => { setPolicy('ask'); setPolicyOpen(false) }} className="w-full p-2 text-left hover:bg-[var(--color-paper-3)]"><strong className="block text-xs">Ask approval</strong><span className="text-[10px] text-[var(--color-ink-2)]">Review file changes and important actions.</span></button>
+                      <button type="button" onClick={() => { setPolicy('full-access'); setPolicyOpen(false) }} className="w-full p-2 text-left hover:bg-[var(--color-paper-3)]"><strong className="block text-xs text-[var(--color-warning)]">Full access</strong><span className="text-[10px] text-[var(--color-ink-2)]">Allow workspace writes and commands for this chat.</span></button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <button type="button" onClick={() => void sendMessage()} disabled={sending || !input.trim()} className="chat-send-button shrink-0 grid h-7 w-7 place-items-center rounded-[7px] bg-[var(--color-accent-strong)] text-white disabled:opacity-40" title="Send (Enter)">
+                {sending ? <LoaderCircle className="h-3.5 w-3.5 animate-spin" /> : <ArrowUp className="h-4 w-4" strokeWidth={2.4} />}
+              </button>
+            </div>
           </div>
         </div>
       </footer>
