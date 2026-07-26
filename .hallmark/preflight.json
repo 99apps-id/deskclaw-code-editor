@@ -1,0 +1,9 @@
+{
+  "scannedAt": "2026-07-26",
+  "framework": "Electron + React 19 + Tailwind CSS v4",
+  "fontStack": "Segoe UI + Cascadia Code",
+  "palette": "existing VS Code-like dark palette replaced by design.md semantic OKLCH tokens",
+  "motion": "motion-cut",
+  "spacing": "4-point",
+  "source": ["package.json", "src/renderer/styles/globals.css", "docs/product-design.md"]
+}

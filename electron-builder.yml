@@ -1,0 +1,99 @@
+appId: com.deskclaw.code-editor
+productName: DeskClaw Code Editor
+copyright: Copyright © 2026 99apps.id
+
+directories:
+  output: dist
+  buildResources: resources
+
+electronDist: node_modules/electron/dist
+
+asar: true
+compression: normal
+asarUnpack:
+  - "node_modules/@lydell/node-pty/**"
+  - "node_modules/@lydell/node-pty-*/**"
+
+extraResources:
+  - from: resources/node
+    to: node
+    filter:
+      - "**/*"
+  - from: resources/openclaw
+    to: openclaw
+    filter:
+      - "**/*"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: resources/icon.ico
+  artifactName: "DeskClaw-Code-Editor-Setup-${version}.${ext}"
+  # Sign when CSC_LINK + CSC_KEY_PASSWORD are set in CI
+  signAndEditExecutable: true
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: resources/icon.icns
+  artifactName: "DeskClaw-Code-Editor-${version}-mac-${arch}.${ext}"
+  category: public.app-category.developer-tools
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: resources/entitlements.mac.plist
+  entitlementsInherit: resources/entitlements.mac.plist
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+    - target: rpm
+      arch:
+        - x64
+  icon: resources/icon.png
+  artifactName: "DeskClaw-Code-Editor-${version}-linux-${arch}.${ext}"
+  category: Development
+  synopsis: AI-powered code editor
+  maintainer: 99apps.id
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  displayLanguageSelector: true
+  multiLanguageInstaller: true
+  installerLanguages:
+    - en_US
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  installerSidebar: resources/installer/installer-sidebar.bmp
+  license: resources/installer/license.txt
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: DeskClaw Code Editor
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!node_modules/**/*"
+  - "node_modules/@lydell/node-pty/**/*"
+  - "node_modules/@lydell/node-pty-*/**/*"
+  - "!src/**/*"
+  - "!scripts/**/*"
+  - "!build/**/*"
+  - "!docs/**/*"
+  - "!.cobrain/**/*"
+  - "!.github/**/*"
+  - "!resources/node/**/*"
+  - "!resources/openclaw/**/*"

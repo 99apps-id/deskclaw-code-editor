@@ -1,0 +1,202 @@
+/**
+ * electron-builder config (optional code signing).
+ * - No CSC_LINK → unsigned (fine for local builds)
+ * - CSC_LINK + CSC_KEY_PASSWORD → sign automatically
+ * Commands:
+ *   pnpm run package:win         — build (signs if cert present)
+ *   pnpm run package:win:signed — require signing (loads .env)
+ */
+const fs = require('node:fs')
+const path = require('node:path')
+
+const hasExplicitCert = Boolean(process.env.CSC_LINK || process.env.WIN_CSC_LINK)
+if (!hasExplicitCert && process.env.CSC_IDENTITY_AUTO_DISCOVERY == null) {
+  process.env.CSC_IDENTITY_AUTO_DISCOVERY = 'false'
+}
+
+function exists(p) {
+  try {
+    return fs.existsSync(p)
+  } catch {
+    return false
+  }
+}
+
+function readEntryPath(openclawDir) {
+  const entryJs = path.join(openclawDir, 'dist', 'entry.js')
+  const entryMjs = path.join(openclawDir, 'dist', 'entry.mjs')
+  if (exists(entryJs)) return entryJs
+  if (exists(entryMjs)) return entryMjs
+  return null
+}
+
+function validateOpenclaw(openclawDir) {
+  const missing = []
+
+  if (!exists(path.join(openclawDir, 'openclaw.mjs'))) {
+    missing.push('openclaw.mjs')
+  }
+  if (!exists(path.join(openclawDir, 'node_modules'))) {
+    missing.push('node_modules/')
+  }
+
+  const entryPath = readEntryPath(openclawDir)
+  if (!entryPath) {
+    missing.push('dist/entry.(m)js')
+    return missing
+  }
+
+  try {
+    const entryContent = fs.readFileSync(entryPath, 'utf-8')
+    const importRegex = /\bimport\s+(?:[^'"]+from\s+)?['"](\.\/[^'"]+)['"]/g
+    let match
+    while ((match = importRegex.exec(entryContent))) {
+      const rel = match[1]
+      if (!rel.startsWith('./')) continue
+      const target = path.join(openclawDir, 'dist', rel.replace(/^\.\//, ''))
+      if (!exists(target)) {
+        missing.push(`dist/${rel.replace(/^\.\//, '')}`)
+      }
+    }
+  } catch {
+    missing.push('dist/entry.(m)js (read failed)')
+  }
+
+  const controlUiIndex = path.join(openclawDir, 'dist', 'control-ui', 'index.html')
+  if (!exists(controlUiIndex)) {
+    missing.push('dist/control-ui/index.html (gateway Control UI)')
+  }
+
+  return missing
+}
+
+const iconIcoPath = path.join(__dirname, 'resources', 'icon.ico')
+// Default off: NSIS `useZip` has caused "Failed to decompress files / Error opening ZIP file"
+// on large OpenClaw bundles. Opt in with OPENCLAW_FAST_INSTALLER=1 for faster local packs.
+const fastInstallerMode = process.env.OPENCLAW_FAST_INSTALLER === '1'
+
+module.exports = {
+  appId: 'com.deskclaw.code-editor',
+  productName: 'DeskClaw Code Editor',
+  copyright: 'Copyright © 2026 99apps.id',
+
+  publish: {
+    provider: 'github',
+    owner: '99apps-id',
+    repo: 'openclaw-desktop-plus',
+    vPrefixedTagName: true,
+    releaseType: 'release',
+  },
+
+  directories: {
+    output: 'dist',
+    buildResources: 'resources',
+  },
+
+  electronDist: 'node_modules/electron/dist',
+
+  asar: true,
+  compression: 'normal',
+  // Unpack renderer/preload so file:// resolves assets on Windows (avoid blank screen)
+  asarUnpack: [
+    'out/renderer/**',
+    'out/preload/**',
+    'node_modules/@lydell/node-pty/**',
+    'node_modules/@lydell/node-pty-*/**',
+  ],
+
+  extraResources: [
+    { from: 'resources/node', to: 'node', filter: ['**/*'] },
+    { from: 'resources/openclaw', to: 'openclaw', filter: ['**/*'] },
+    ...(exists(iconIcoPath)
+      ? [{ from: iconIcoPath, to: 'icon.ico' }]
+      : []),
+    ...(exists(path.join(__dirname, 'resources', 'tray-icon.png'))
+      ? [{ from: 'resources/tray-icon.png', to: 'tray-icon.png' }]
+      : []),
+    ...(exists(path.join(__dirname, 'resources', 'apple-touch-icon.png'))
+      ? [{ from: 'resources/apple-touch-icon.png', to: 'apple-touch-icon.png' }]
+      : []),
+    ...(exists(path.join(__dirname, 'resources', 'bundle-manifest.json'))
+      ? [{ from: 'resources/bundle-manifest.json', to: 'bundle-manifest.json' }]
+      : []),
+  ],
+
+  afterPack: async (context) => {
+    const appOutDir = context.appOutDir
+    const source = path.join(__dirname, 'resources', 'openclaw')
+    const target = path.join(appOutDir, 'resources', 'openclaw')
+
+    if (exists(source)) {
+      fs.rmSync(target, { recursive: true, force: true })
+      fs.mkdirSync(target, { recursive: true })
+      fs.cpSync(source, target, { recursive: true, force: true, dereference: true })
+    }
+
+    const missing = validateOpenclaw(target)
+    if (missing.length > 0) {
+      throw new Error(`Packaged OpenClaw resources missing: ${missing.join(', ')}`)
+    }
+  },
+
+  // macOS notarization — runs after code signing when APPLE_ID / APPLE_ID_PASSWORD / APPLE_TEAM_ID are set
+  afterSign: exists(path.join(__dirname, 'scripts', 'after-sign.js'))
+    ? async (context) => (await import('./scripts/after-sign.js')).default(context)
+    : undefined,
+
+  win: {
+    target: [{ target: 'nsis', arch: ['x64'] }],
+    icon: iconIcoPath,
+    artifactName: 'OpenClaw-Desktop-Plus-Setup-${version}.${ext}',
+    // true = rcedit embeds OpenClaw icon into the .exe (required — otherwise Electron default icon shows)
+    // Without CSC_LINK only resource edit runs, not signing
+    // SKIP_EXE_RESOURCE_EDIT=1 skips edit when winCodeSign/rcedit mirrors are unreachable (leaves Electron icon)
+    signAndEditExecutable: process.env.SKIP_EXE_RESOURCE_EDIT !== '1',
+    // Signing: CSC_LINK + CSC_KEY_PASSWORD (or WIN_* variants)
+    forceCodeSigning: false, // Allow unsigned builds without a cert
+    // Also sign bundled exe/dll when a cert is configured
+    signExts: ['exe', 'dll'],
+  },
+
+  nsis: {
+    oneClick: false,
+    perMachine: false,
+    allowToChangeInstallationDirectory: true,
+    // Show language selector on installer start (English wizard UI)
+    displayLanguageSelector: true,
+    multiLanguageInstaller: true,
+    installerLanguages: ['en_US'],
+    // License page: single English file (UTF-8 with BOM required for NSIS display)
+    license: 'resources/installer/license.txt',
+    // Use zip container for faster extraction on large bundled resources.
+    useZip: fastInstallerMode,
+    // Differential package is not used in our current release flow.
+    differentialPackage: false,
+    installerIcon: iconIcoPath,
+    uninstallerIcon: iconIcoPath,
+    installerSidebar: 'resources/installer/installer-sidebar.bmp',
+    createDesktopShortcut: true,
+    createStartMenuShortcut: true,
+    shortcutName: 'DeskClaw Code Editor',
+    runAfterFinish: true,
+    deleteAppDataOnUninstall: false,
+    // Repo must ship build/installer.nsh (.gitignore exception) — NSIS fails if missing
+    include: 'build/installer.nsh',
+  },
+
+  files: [
+    'out/**/*',
+    'package.json',
+    '!node_modules/**/*',
+    'node_modules/@lydell/node-pty/**/*',
+    'node_modules/@lydell/node-pty-*/**/*',
+    '!src/**/*',
+    '!scripts/**/*',
+    '!build/**/*',
+    '!docs/**/*',
+    '!.cobrain/**/*',
+    '!.github/**/*',
+    '!resources/node/**/*',
+    '!resources/openclaw/**/*',
+  ],
+}

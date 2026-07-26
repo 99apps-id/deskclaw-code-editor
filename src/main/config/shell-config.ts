@@ -1,0 +1,103 @@
+/**
+ * Desktop shell config read/write.
+ * Path: %APPDATA%\DeskClaw Code Editor\config.json
+ * Separate from OpenClaw main config; stores shell-only settings.
+ */
+
+import fs from 'node:fs'
+import path from 'node:path'
+import { app } from 'electron'
+import type { ShellConfig } from '../../shared/types.js'
+import {
+  APP_NAME,
+  APP_NAME_LEGACY,
+  DEFAULT_GATEWAY_PORT,
+  SHELL_CONFIG_FILE,
+} from '../../shared/constants.js'
+import { normalizeToShellLocale } from '../../shared/shell-locale.js'
+
+function getShellConfigPath(): string {
+  const nextDir = path.join(app.getPath('appData'), APP_NAME)
+  const nextPath = path.join(nextDir, SHELL_CONFIG_FILE)
+  if (fs.existsSync(nextPath)) return nextPath
+
+  // One-time migrate from pre-"Plus" AppData folder so settings survive the rename.
+  const legacyPath = path.join(app.getPath('appData'), APP_NAME_LEGACY, SHELL_CONFIG_FILE)
+  if (fs.existsSync(legacyPath)) {
+    try {
+      fs.mkdirSync(nextDir, { recursive: true })
+      fs.copyFileSync(legacyPath, nextPath)
+    } catch {
+      return legacyPath
+    }
+  }
+  return nextPath
+}
+
+/** Default shell config */
+export function getDefaultShellConfig(): ShellConfig {
+  return {
+    closeToTray: false,
+    autoStart: false,
+    theme: 'system',
+    lastGatewayPort: DEFAULT_GATEWAY_PORT,
+    updateChannel: 'stable',
+    onboardingMainWindowExpanded: false,
+    autoCheckUpdates: true,
+    windowBounds: {
+      x: -1,
+      y: -1,
+      width: 980,
+      height: 920,
+      maximized: false,
+    },
+  }
+}
+
+/**
+ * Read shell config.
+ * - Missing file → defaults
+ * - Parse error → defaults + warning
+ */
+export function readShellConfig(): ShellConfig {
+  const configPath = getShellConfigPath()
+  try {
+    if (!fs.existsSync(configPath)) {
+      return getDefaultShellConfig()
+    }
+    const raw = fs.readFileSync(configPath, 'utf-8')
+    const parsed = JSON.parse(raw) as unknown
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const merged = { ...getDefaultShellConfig(), ...parsed } as ShellConfig
+      // Drop removed locales (e.g. former zh-CN / zh-TW) → English or another supported locale.
+      if (typeof merged.locale === 'string') {
+        merged.locale = normalizeToShellLocale(merged.locale)
+      }
+      return merged
+    }
+    return getDefaultShellConfig()
+  } catch (err) {
+    console.warn(
+      `[config] Shell config parse failed, using defaults: ${configPath}`,
+      err instanceof Error ? err.message : String(err)
+    )
+    return getDefaultShellConfig()
+  }
+}
+
+/** Write shell config (atomic rename on Windows). */
+export function writeShellConfig(config: ShellConfig): void {
+  const configPath = getShellConfigPath()
+  const dir = path.dirname(configPath)
+  fs.mkdirSync(dir, { recursive: true })
+  const data = JSON.stringify(config, null, 2) + '\n'
+  const tmpPath = `${configPath}.tmp`
+  fs.writeFileSync(tmpPath, data, 'utf-8')
+  try {
+    fs.renameSync(tmpPath, configPath)
+  } catch {
+    // Windows: rename fails if target exists; remove it and retry
+    fs.unlinkSync(configPath)
+    fs.renameSync(tmpPath, configPath)
+  }
+}

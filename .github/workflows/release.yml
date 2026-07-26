@@ -1,0 +1,606 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to publish (must already exist). Must equal v + package.json version, e.g. v0.8.1+openclaw.2026.7.1-2. Required: the workflow checks out this tag before building. Leaving it empty uses the current branch and can mix shell / OpenClaw / Control UI (black screen).'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref_name || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION_CI: '22.23.1'
+  # check-openclaw-versions: validate pin vs bundle-manifest only (no npm registry query / latest warn).
+  OPENCLAW_SKIP_NPM_LATEST_CHECK: '1'
+  # workflow_dispatch: must checkout the release tag, not the branch that triggered the run (avoids shell/OpenClaw pin vs artifact mismatch → Control UI black screen).
+  CHECKOUT_REF: >-
+    ${{
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.tag != '' &&
+      (startsWith(github.event.inputs.tag, 'refs/') && github.event.inputs.tag || format('refs/tags/{0}', github.event.inputs.tag)) ||
+      github.ref
+    }}
+  # Caching: setup-node `cache: pnpm` restores the pnpm store (keyed by lockfile); it does not substitute repo source.
+  # `pnpm install --frozen-lockfile` links node_modules for the checked-out tree. package_win `Cache Electron` only caches
+  # Electron/electron-builder download dirs (not app code). Control UI comes from this run's upload-artifact + run-id-scoped download.
+
+jobs:
+  release_gate:
+    name: Release context check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate manual dispatch
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          if [ -z "${{ github.event.inputs.tag }}" ]; then
+            echo "::error::Manual release requires a tag input matching the Git tag (e.g. v0.8.0+openclaw.2026.7.1-2). Otherwise the workflow packages the current branch and can mix OpenClaw / Control UI with the Release tag."
+            exit 1
+          fi
+
+  build_control_ui:
+    name: Build OpenClaw Control UI (Linux)
+    needs: release_gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 1
+
+      - name: Print build identity (ref + SHA)
+        run: |
+          echo "CHECKOUT_REF=${{ env.CHECKOUT_REF }}"
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          git rev-parse HEAD
+          git log -1 --oneline
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_CI }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Control UI for bundle
+        env:
+          NODE_OPTIONS: '--max-old-space-size=4096'
+        run: pnpm exec tsx scripts/ci-build-openclaw-control-ui.ts
+
+      - name: Upload Control UI dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-control-ui-dist
+          path: build/_ci_openclaw_control_ui_root/dist/control-ui
+          retention-days: 2
+          if-no-files-found: error
+
+  verify:
+    name: Verify (lint, type-check, build)
+    needs: release_gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ELECTRON_CACHE: ~/.cache/electron
+      ELECTRON_BUILDER_CACHE: ~/.cache/electron-builder
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: false
+
+      - name: Print build identity (ref + SHA)
+        run: |
+          echo "CHECKOUT_REF=${{ env.CHECKOUT_REF }}"
+          echo "GITHUB_REF=$GITHUB_REF"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          git rev-parse HEAD
+          git log -1 --oneline
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_CI }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm run lint
+
+      - name: Type check
+        run: pnpm run type-check
+
+      - name: Build
+        run: pnpm run build
+
+      # Validates package.json pin vs bundle-manifest; pin need not equal npm openclaw@latest.
+      - name: Check OpenClaw version consistency (pin vs bundle-manifest)
+        run: pnpm run check-openclaw-versions
+
+  package_win:
+    name: Package Windows Installer
+    needs:
+      - verify
+      - build_control_ui
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload-installer.outputs.artifact-id }}
+    # SignPath mode: when vars.USE_SIGNPATH=true, build unsigned then SignPath; otherwise CSC_LINK
+    env:
+      CSC_LINK: ${{ vars.USE_SIGNPATH == 'true' && '' || secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ vars.USE_SIGNPATH == 'true' && '' || secrets.CSC_KEY_PASSWORD }}
+      ELECTRON_CACHE: ~\AppData\Local\electron\Cache
+      ELECTRON_BUILDER_CACHE: ~\AppData\Local\electron-builder\Cache
+      # Whole job: any script that touches OpenClaw must not leave npm control-ui before Linux artifact merge
+      OPENCLAW_SKIP_CONTROL_UI_BUILD: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: false
+
+      - name: Print build identity (ref + SHA)
+        shell: pwsh
+        run: |
+          Write-Host "CHECKOUT_REF=${{ env.CHECKOUT_REF }}"
+          Write-Host "GITHUB_REF=$env:GITHUB_REF"
+          Write-Host "GITHUB_SHA=$env:GITHUB_SHA"
+          git rev-parse HEAD
+          git log -1 --oneline
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_CI }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ELECTRON_CACHE }}
+            ${{ env.ELECTRON_BUILDER_CACHE }}
+          # Lockfile + builder config: invalidates when Electron or tooling versions / extra downloads change (not app TS/CSS alone).
+          key: ${{ runner.os }}-electron-${{ hashFiles('pnpm-lock.yaml', 'electron-builder.config.cjs', 'electron-builder.yml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app
+        run: pnpm run build
+
+      - name: Prepare apple-touch-icon for generate-resources
+        run: |
+          if (Test-Path resources/apple-touch-icon.png) {
+            Copy-Item resources/apple-touch-icon.png apple-touch-icon.png -Force
+          }
+
+      # OpenClaw: version from package.json `openclawBundleVersion` (override: OPENCLAW_DESKTOP_BUNDLE_VERSION).
+      - name: Download Node.js and OpenClaw (skip Vite on Windows)
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+          npm_config_fetch_retries: "5"
+          npm_config_fetch_retry_mintimeout: "20000"
+        run: |
+          pnpm run download-node
+          pnpm run download-openclaw
+
+      - name: Assert OpenClaw npm bundle matches desktop pin
+        run: pnpm exec tsx scripts/assert-openclaw-pin-aligns.ts
+
+      # download-artifact merges into the path: leaves orphan assets/*.js from npm or self-hosted runners.
+      # download-openclaw strips dist/control-ui when SKIP_CONTROL_UI_BUILD=1; this step is a second line of defense.
+      - name: Ensure empty dist/control-ui before merge
+        shell: pwsh
+        run: |
+          $p = Join-Path "build/openclaw/dist" "control-ui"
+          if (Test-Path -LiteralPath $p) {
+            Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction Stop
+          }
+
+      # run-id: bind to this workflow run only (never pick artifact from another run / fork confusion)
+      - name: Merge OpenClaw Control UI (Linux-built)
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-control-ui-dist
+          path: build/openclaw/dist/control-ui
+          run-id: ${{ github.run_id }}
+
+      - name: Assert merged Control UI layout
+        shell: pwsh
+        run: |
+          $idx = Join-Path "build/openclaw/dist/control-ui" "index.html"
+          if (-not (Test-Path -LiteralPath $idx)) {
+            Write-Error "Control UI artifact merge failed: missing $idx (check upload/download paths)."
+            exit 1
+          }
+
+      # Same checks as verify-bundle / verify-packaged-win (esbuild parse) — catch HTML-as-JS or broken merge before prepare-bundle.
+      - name: Verify merged Control UI bundle
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm exec tsx scripts/verify-merged-control-ui.ts build/openclaw/dist/control-ui
+
+      - name: Prepare bundle
+        env:
+          NODE_OPTIONS: "--max-old-space-size=4096"
+        run: pnpm run prepare-bundle
+
+      # Validates on-disk bundles vs package.json `openclawBundleVersion` + bundle-manifest (not npm latest).
+      - name: Verify resource versions (Node, OpenClaw, project pin)
+        run: pnpm run verify-resource-versions
+
+      - name: Package Windows installer
+        run: pnpm run package:win
+
+      - name: Copy bundle manifest to dist
+        run: Copy-Item resources/bundle-manifest.json dist/ -Force
+
+      - name: Upload installer artifact
+        id: upload-installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-desktop-build
+          path: |
+            dist/OpenClaw-Desktop-Plus-Setup-*.exe
+            dist/bundle-manifest.json
+
+  package_mac:
+    name: Package macOS DMG
+    needs:
+      - verify
+      - build_control_ui
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      ELECTRON_CACHE: ~/Library/Caches/electron
+      ELECTRON_BUILDER_CACHE: ~/Library/Caches/electron-builder
+      OPENCLAW_SKIP_CONTROL_UI_BUILD: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_CI }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ELECTRON_CACHE }}
+            ${{ env.ELECTRON_BUILDER_CACHE }}
+          key: ${{ runner.os }}-electron-${{ hashFiles('pnpm-lock.yaml', 'electron-builder.config.cjs', 'electron-builder.yml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Electron app
+        run: pnpm run build
+
+      - name: Download Node.js and OpenClaw
+        env:
+          npm_config_fetch_retries: '5'
+          npm_config_fetch_retry_mintimeout: '20000'
+        run: |
+          pnpm run download-node
+          pnpm run download-openclaw
+
+      - name: Merge Control UI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-control-ui-dist
+          path: build/openclaw/dist/control-ui
+          run-id: ${{ github.run_id }}
+
+      - name: Prepare bundle
+        run: pnpm run prepare-bundle
+
+      - name: Package macOS DMG
+        run: pnpm run package:mac
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-desktop-mac
+          path: dist/OpenClaw-Desktop-Plus-*-mac-*.dmg
+
+  package_linux:
+    name: Package Linux (AppImage + deb + rpm)
+    needs:
+      - verify
+      - build_control_ui
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      ELECTRON_CACHE: ~/.cache/electron
+      ELECTRON_BUILDER_CACHE: ~/.cache/electron-builder
+      OPENCLAW_SKIP_CONTROL_UI_BUILD: '1'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 1
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION_CI }}
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Cache Electron
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ELECTRON_CACHE }}
+            ${{ env.ELECTRON_BUILDER_CACHE }}
+          key: ${{ runner.os }}-electron-${{ hashFiles('pnpm-lock.yaml', 'electron-builder.config.cjs', 'electron-builder.yml') }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Linux packaging deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libappindicator-dev libayatana-appindicator3-dev || true
+
+      - name: Build Electron app
+        run: pnpm run build
+
+      - name: Download Node.js and OpenClaw
+        env:
+          npm_config_fetch_retries: '5'
+          npm_config_fetch_retry_mintimeout: '20000'
+        run: |
+          pnpm run download-node
+          pnpm run download-openclaw
+
+      - name: Merge Control UI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-control-ui-dist
+          path: build/openclaw/dist/control-ui
+          run-id: ${{ github.run_id }}
+
+      - name: Prepare bundle
+        run: pnpm run prepare-bundle
+
+      - name: Package Linux
+        run: pnpm run package:linux
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-desktop-linux
+          path: |
+            dist/OpenClaw-Desktop-Plus-*-linux-*.AppImage
+            dist/OpenClaw-Desktop-Plus-*-linux-*.deb
+            dist/OpenClaw-Desktop-Plus-*-linux-*.rpm
+
+  sign_path:
+    name: Sign with SignPath Foundation
+    needs:
+      - package_win
+    # Enable when repo variable USE_SIGNPATH=true; otherwise use CSC_LINK developer signing
+    if: vars.USE_SIGNPATH == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+
+    steps:
+      - name: Submit to SignPath for signing
+        id: signpath
+        uses: signpath/github-action-submit-signing-request@v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ secrets.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ secrets.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: openclaw-desktop
+          github-artifact-id: ${{ needs.package_win.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: dist-signed-raw
+
+      - name: Extract signed exe from zip
+        run: |
+          cd dist-signed-raw
+          shopt -s nullglob
+          for z in *.zip; do
+            unzip -o "$z"
+            rm -f "$z"
+          done
+
+      - name: Download build artifact for bundle manifest
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-desktop-build
+          path: manifest-temp
+
+      - name: Copy bundle manifest into signed artifact
+        run: |
+          if [ -f manifest-temp/dist/bundle-manifest.json ]; then
+            cp manifest-temp/dist/bundle-manifest.json dist-signed-raw/
+          fi
+
+      - name: Upload signed installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-desktop-setup
+          path: dist-signed-raw/
+
+  publish_release:
+    name: Publish GitHub Release
+    needs:
+      - package_win
+      - package_mac
+      - package_linux
+      - sign_path
+    # sign_path is skipped when USE_SIGNPATH≠true; without `skipped`, this job would never run.
+    if: ${{ always() && needs.package_win.result == 'success' && needs.package_mac.result == 'success' && needs.package_linux.result == 'success' && (needs.sign_path.result == 'success' || needs.sign_path.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.CHECKOUT_REF }}
+          fetch-depth: 0
+          fetch-tags: true
+          submodules: false
+
+      - name: Print build identity (ref + SHA)
+        run: |
+          echo "CHECKOUT_REF=${{ env.CHECKOUT_REF }}"
+          echo "GITHUB_SHA=$GITHUB_SHA"
+          git rev-parse HEAD
+          git log -1 --oneline
+
+      - name: Download signed installer
+        if: needs.sign_path.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-desktop-setup
+          path: dist
+
+      - name: Download build artifact (unsigned Windows)
+        if: needs.sign_path.result == 'skipped'
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-desktop-build
+          path: dist
+
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-desktop-mac
+          path: dist
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openclaw-desktop-linux
+          path: dist
+
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          for file in OpenClaw-Desktop-Plus-Setup-*.exe OpenClaw-Desktop-Plus-*-mac-*.dmg OpenClaw-Desktop-Plus-*-linux-*.AppImage OpenClaw-Desktop-Plus-*-linux-*.deb; do
+            [ -f "$file" ] || continue
+            sha256sum "$file" > "$file.sha256"
+          done
+
+      - name: Generate latest.yml for electron-updater
+        id: gen-yml
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          if [[ "$VERSION" == *"-beta"* ]] || [[ "$VERSION" == *"-alpha"* ]] || [[ "$VERSION" == *"-rc"* ]]; then
+            CHANNEL=beta
+          else
+            CHANNEL=stable
+          fi
+          EXE=$(find dist -name "OpenClaw-Desktop-Plus-Setup-*.exe" -type f | head -1)
+          if [ -z "$EXE" ]; then
+            echo "error: no OpenClaw-Desktop-Plus-Setup-*.exe found in dist"
+            exit 1
+          fi
+          MANIFEST_ARG=""
+          if [ -f dist/bundle-manifest.json ]; then
+            MANIFEST_ARG="--manifest dist/bundle-manifest.json"
+          fi
+          node scripts/generate-latest-yml.mjs --exe "$EXE" --version "$VERSION" --channel "$CHANNEL" --output dist $MANIFEST_ARG
+          if [ "$CHANNEL" = "beta" ]; then
+            echo "yml_file=dist/latest-beta.yml" >> $GITHUB_OUTPUT
+          else
+            echo "yml_file=dist/latest.yml" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
+          name: ${{ inputs.tag || github.ref_name }}
+          files: |
+            dist/OpenClaw-Desktop-Plus-Setup-*.exe
+            dist/OpenClaw-Desktop-Plus-Setup-*.exe.sha256
+            dist/OpenClaw-Desktop-Plus-*-mac-*.dmg
+            dist/OpenClaw-Desktop-Plus-*-mac-*.dmg.sha256
+            dist/OpenClaw-Desktop-Plus-*-linux-*.AppImage
+            dist/OpenClaw-Desktop-Plus-*-linux-*.AppImage.sha256
+            dist/OpenClaw-Desktop-Plus-*-linux-*.deb
+            dist/OpenClaw-Desktop-Plus-*-linux-*.deb.sha256
+            dist/latest.yml
+            dist/latest-linux.yml
+            dist/latest-mac.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
