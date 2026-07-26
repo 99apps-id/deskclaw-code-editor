@@ -94,7 +94,7 @@ export function CodeEditorPanel() {
   const [showMarkdownPreview, setShowMarkdownPreview] = useState(false)
   const [showOutline, setShowOutline] = useState(false)
   const [diagnostics, setDiagnostics] = useState<DiagnosticItem[]>([])
-  const [autoSave, setAutoSave] = useState<'off' | 'afterDelay'>('afterDelay')
+  const [_autoSave, _setAutoSave] = useState<'off' | 'afterDelay'>('afterDelay')
 
   const [splitView, setSplitView] = useState(false)
   const [secondaryPath, _setSecondaryPath] = useState<string | null>(null)
@@ -131,7 +131,7 @@ export function CodeEditorPanel() {
       }
     }, 1000)
     return () => clearTimeout(timer)
-  }, [activeFile, dirty, autoSave, activePath])
+  }, [activeFile, dirty, _autoSave, activePath])
 
   // Track file navigation history & activePath storage
   useEffect(() => {
@@ -315,7 +315,7 @@ export function CodeEditorPanel() {
       const model = editorInstance.getModel()
       if (!model) return
       const selectedText = model.getValueInRange(e.selection)
-      ;(window as any).deskclawActiveSelection = selectedText
+      ;(window as unknown as Record<string, string>).deskclawActiveSelection = selectedText
       if (selectedText) {
         const lineCount = e.selection.endLineNumber - e.selection.startLineNumber + 1
         setSelectionInfo({ chars: selectedText.length, lines: lineCount })

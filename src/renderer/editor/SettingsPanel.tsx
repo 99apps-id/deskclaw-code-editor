@@ -79,7 +79,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose }) => {
             <label className="text-sm">Theme</label>
             <select
               value={theme}
-              onChange={(e) => setTheme(e.target.value as any)}
+              onChange={(e) => setTheme(e.target.value as 'light' | 'dark' | 'system')}
               className="rounded border border-[var(--color-rule)] bg-[var(--color-paper-3)] px-2 py-1 text-sm"
             >
               <option value="system">System</option>

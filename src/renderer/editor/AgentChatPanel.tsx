@@ -241,7 +241,7 @@ export function AgentChatPanel({ onClose }: { onClose?: () => void }) {
       return
     }
     const name = activePath.split(/[\\/]/).pop() ?? activePath
-    const selection = (window as any).deskclawActiveSelection ?? ''
+    const selection = (window as unknown as Record<string, string>).deskclawActiveSelection ?? ''
     if (!selection || !selection.trim()) {
       setNotice('No code currently selected in editor. Select code in editor first.')
       return

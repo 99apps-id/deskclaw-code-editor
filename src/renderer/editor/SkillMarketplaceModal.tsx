@@ -31,7 +31,7 @@ export function SkillMarketplaceModal({ isOpen, onClose }: SkillMarketplaceModal
     try {
       const res = await window.electronAPI.skillsList({ source: 'all' })
       if (Array.isArray(res)) {
-        const slugs = new Set(res.map((s: any) => s.key || s.name || s.slug))
+        const slugs = new Set(res.map((s: { key?: string; name?: string; slug?: string }) => s.key || s.name || s.slug || ''))
         setInstalledSlugs(slugs)
       }
     } catch {

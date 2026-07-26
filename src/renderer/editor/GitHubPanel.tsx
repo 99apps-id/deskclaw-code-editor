@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { GitPullRequest, RefreshCw, ExternalLink, Play, Plus, GitMerge, Loader2 } from 'lucide-react'
+import { GitPullRequest, RefreshCw, ExternalLink, Plus, GitMerge, Loader2 } from 'lucide-react'
 
 export function GitHubPanel({ workspacePath }: { workspacePath: string | null }) {
   const [prs, setPrs] = useState<Array<{ number: number; title: string; headRefName: string; url: string }>>([])

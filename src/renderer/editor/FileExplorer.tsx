@@ -9,7 +9,7 @@ import {
   Folder, FolderOpen, ChevronRight, ChevronDown, ChevronsUp,
   FilePlus, FolderPlus, RefreshCw, PanelRightClose,
   FolderOpen as FolderOpenIcon,
-  PencilLine, Search, FolderSearch, Pencil,
+  PencilLine, Search,
 } from 'lucide-react'
 import { useAgentActivityStore } from '../stores/agent-activity-store'
 import { FileTypeIcon } from './FileTypeIcon'

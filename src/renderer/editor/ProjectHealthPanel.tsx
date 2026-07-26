@@ -1,33 +1,33 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Activity, CheckCircle2, AlertTriangle, Package, ShieldCheck, RefreshCw, Loader2 } from 'lucide-react'
 
 export function ProjectHealthPanel({ workspacePath }: { workspacePath: string | null }) {
   const [loading, setLoading] = useState(false)
-  const [packageJson, setPackageJson] = useState<any>(null)
+  const [packageJson, setPackageJson] = useState<Record<string, unknown> | null>(null)
   const [depCount, setDepCount] = useState(0)
   const [devDepCount, setDevDepCount] = useState(0)
 
-  useEffect(() => {
-    if (!workspacePath) return
-    void checkHealth()
-  }, [workspacePath])
-
-  const checkHealth = async () => {
+  const checkHealth = useCallback(async () => {
     if (!workspacePath) return
     setLoading(true)
     try {
       const pkgPath = workspacePath.endsWith('/') || workspacePath.endsWith('\\') ? `${workspacePath}package.json` : `${workspacePath}/package.json`
       const data = await window.electronAPI.editorReadFile(pkgPath)
-      const parsed = JSON.parse(data.content)
+      const parsed = JSON.parse(data.content) as Record<string, unknown>
       setPackageJson(parsed)
-      setDepCount(Object.keys(parsed.dependencies || {}).length)
-      setDevDepCount(Object.keys(parsed.devDependencies || {}).length)
+      setDepCount(Object.keys((parsed.dependencies as Record<string, string>) || {}).length)
+      setDevDepCount(Object.keys((parsed.devDependencies as Record<string, string>) || {}).length)
     } catch {
       setPackageJson(null)
     } finally {
       setLoading(false)
     }
-  }
+  }, [workspacePath])
+
+  useEffect(() => {
+    if (!workspacePath) return
+    void checkHealth()
+  }, [workspacePath, checkHealth])
 
   if (!workspacePath) {
     return <div className="grid h-full place-items-center text-xs text-[var(--color-ink-2)]">Open a workspace folder to view Project Health Audit.</div>
@@ -64,8 +64,8 @@ export function ProjectHealthPanel({ workspacePath }: { workspacePath: string | 
                   <Package className="h-4 w-4" />
                   <span>Package Name</span>
                 </div>
-                <div className="font-mono text-sm font-bold truncate">{packageJson.name || 'Unnamed Project'}</div>
-                <div className="text-[10px] text-[var(--color-ink-2)]">v{packageJson.version || '0.0.0'}</div>
+                <div className="font-mono text-sm font-bold truncate">{String(packageJson.name || 'Unnamed Project')}</div>
+                <div className="text-[10px] text-[var(--color-ink-2)]">v{String(packageJson.version || '0.0.0')}</div>
               </div>
 
               <div className="p-3 rounded border border-[var(--color-rule)] bg-[var(--color-paper-2)]">
@@ -90,7 +90,7 @@ export function ProjectHealthPanel({ workspacePath }: { workspacePath: string | 
             <div className="rounded border border-[var(--color-rule)] bg-[var(--color-paper-2)] p-3 text-xs space-y-2">
               <div className="font-semibold text-[var(--color-ink)]">Main Scripts Configured</div>
               <div className="grid grid-cols-2 gap-2 font-mono text-[11px]">
-                {Object.entries(packageJson.scripts || {}).slice(0, 8).map(([name, cmd]) => (
+                {Object.entries((packageJson.scripts as Record<string, string>) || {}).slice(0, 8).map(([name, cmd]) => (
                   <div key={name} className="p-1.5 rounded bg-[var(--color-paper-3)] border border-[var(--color-rule)] truncate">
                     <span className="text-[var(--color-accent-strong)] font-bold">{name}:</span> <span className="text-[var(--color-ink-2)]">{String(cmd)}</span>
                   </div>

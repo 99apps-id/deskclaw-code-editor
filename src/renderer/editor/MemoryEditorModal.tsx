@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Brain, Check, Save, X, Loader2 } from 'lucide-react'
+import { Brain, Save, X, Loader2 } from 'lucide-react'
 
 export interface MemoryEditorModalProps {
   isOpen: boolean

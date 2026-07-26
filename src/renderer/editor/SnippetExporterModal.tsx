@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { Camera, Copy, Check, X, Download } from 'lucide-react'
+import { Camera, Copy, Check, X } from 'lucide-react'
 
 export interface SnippetExporterModalProps {
   isOpen: boolean
