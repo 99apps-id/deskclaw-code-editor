@@ -25,8 +25,10 @@ function exists(p) {
 function readEntryPath(openclawDir) {
   const entryJs = path.join(openclawDir, 'dist', 'entry.js')
   const entryMjs = path.join(openclawDir, 'dist', 'entry.mjs')
+  const openclawMjs = path.join(openclawDir, 'openclaw.mjs')
   if (exists(entryJs)) return entryJs
   if (exists(entryMjs)) return entryMjs
+  if (exists(openclawMjs)) return openclawMjs
   return null
 }
 

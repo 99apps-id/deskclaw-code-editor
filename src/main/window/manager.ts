@@ -234,7 +234,32 @@ export class WindowManager {
     }
 
     if (process.env.ELECTRON_RENDERER_URL) {
-      void window.loadURL(process.env.ELECTRON_RENDERER_URL).then(openDevToolsIfRequested)
+      const devUrl = process.env.ELECTRON_RENDERER_URL
+      let attempts = 0
+      const tryLoadDevUrl = () => {
+        attempts += 1
+        window
+          .loadURL(devUrl)
+          .then(() => {
+            openDevToolsIfRequested()
+            if (!window.isDestroyed()) showWhenReady()
+          })
+          .catch((err) => {
+            logError(
+              `[OpenClaw] Failed to load dev URL: ${devUrl} (${err instanceof Error ? err.message : String(err)}) attempt=${attempts}`,
+            )
+            if (attempts < 10 && !window.isDestroyed()) {
+              setTimeout(tryLoadDevUrl, 500)
+            } else if (!window.isDestroyed()) {
+              openDevToolsIfRequested()
+              showLoadError(
+                'Dev Server Load Failed',
+                `Dev URL: ${devUrl}\n\nError: ${err instanceof Error ? err.message : String(err)}\n\nPlease ensure Vite dev server is running on ${devUrl}.`,
+              )
+            }
+          })
+      }
+      tryLoadDevUrl()
     } else {
       const rendererPath = getShellRendererIndexPath()
       const shellUrl = getShellIndexPageUrl()

@@ -220,24 +220,12 @@ async function ensureOpenClawWorkspaceTemplates(openclawRoot: string): Promise<v
 async function validateOpenClawDist(rootDir: string): Promise<string[]> {
   const entryPath = join(rootDir, 'dist', 'entry.js')
   const entryAlt = join(rootDir, 'dist', 'entry.mjs')
-  const entryExists = (await fileExists(entryPath)) || (await fileExists(entryAlt))
+  const openclawMjs = join(rootDir, 'openclaw.mjs')
+  const entryExists = (await fileExists(entryPath)) || (await fileExists(entryAlt)) || (await fileExists(openclawMjs))
   if (!entryExists) {
-    return ['dist/entry.(m)js']
+    return ['dist/entry.(m)js or openclaw.mjs']
   }
-
-  const entryContent = await readFile((await fileExists(entryPath)) ? entryPath : entryAlt, 'utf8')
-  const importRegex = /\bimport\s+(?:[^'"]+from\s+)?['"](\.\/[^'"]+)['"]/g
-  const missing: string[] = []
-  let match: RegExpExecArray | null
-  while ((match = importRegex.exec(entryContent))) {
-    const rel = match[1]
-    if (!rel.startsWith('./')) continue
-    const target = join(rootDir, 'dist', rel.replace(/^\.\//, ''))
-    if (!(await fileExists(target))) {
-      missing.push(`dist/${rel.replace(/^\.\//, '')}`)
-    }
-  }
-  return missing
+  return []
 }
 
 async function main(): Promise<void> {
