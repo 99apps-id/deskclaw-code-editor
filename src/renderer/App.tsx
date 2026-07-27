@@ -186,20 +186,6 @@ function App() {
     return <LoadingView statusText={t('shell.loading.checkingConfig')} />
   }
   if (route === 'wizard') return <WizardLayout />
-  if (configExists && (gatewayStatus !== 'running' || !gatewayVerified)) {
-    return (
-      <LoadingView
-        statusText={
-          gatewayStatus === 'error'
-            ? 'OpenClaw Gateway could not connect'
-            : 'Connecting to OpenClaw Gateway…'
-        }
-        timedOut={gatewayStatus === 'error'}
-        hintText={gatewayError || 'DeskClaw will open after the local OpenClaw runtime is ready.'}
-        onRetry={() => setGatewayAttempt((value) => value + 1)}
-      />
-    )
-  }
   if (configExists) {
     const panel: EmbeddedPanel =
       route === 'settings' ||
