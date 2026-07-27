@@ -55,6 +55,12 @@ import { listWhatsAppPendingPairingCodes } from './workspace/workspace-memory.js
 import { resolveTrayLocale, getFeishuPairingNotificationStrings, getWhatsAppPairingNotificationStrings, formatFeishuPairingBody } from './tray/tray-i18n.js'
 import { registerShellFileProtocol, registerShellPrivileges } from './shell-protocol.js'
 
+/** Set application identity early for Windows taskbar and system dialogs */
+app.name = APP_NAME
+if (process.platform === 'win32') {
+  app.setAppUserModelId(APP_ID)
+}
+
 /** Must run before app 'ready' so the shell can use openclaw-shell:// instead of file:// */
 registerShellPrivileges()
 

@@ -107,7 +107,7 @@ function GatewayBadge({ status }: { status: GatewayStatusValue }) {
 export function EmbeddedShellLayout({ activePanel, onPanelChange }: EmbeddedShellLayoutProps) {
   const [gatewayStatus, setGatewayStatus] = useState<GatewayStatusValue>('starting')
   const [gatewayError, setGatewayError] = useState('')
-  const [agentVisible, setAgentVisible] = useState(activePanel === 'ai-chat')
+  const [agentVisible, setAgentVisible] = useState(true)
   const [agentWidth, setAgentWidth] = useState(() => {
     const stored = Number(window.localStorage.getItem('deskclaw.agentWidth'))
     return Number.isFinite(stored) && stored >= 280 ? stored : 380
