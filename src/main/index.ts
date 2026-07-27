@@ -282,6 +282,17 @@ app.whenReady().then(() => {
   // 2. Load config
   let shellConfig = readShellConfig()
   const bootConfig = readOpenClawConfig() // Warm cache for gateway and other main-path users
+  if (bootConfig) {
+    const cwdWorkspace = process.cwd()
+    if (cwdWorkspace && fs.existsSync(cwdWorkspace) && fs.statSync(cwdWorkspace).isDirectory()) {
+      bootConfig.agents = bootConfig.agents ?? {}
+      bootConfig.agents.defaults = bootConfig.agents.defaults ?? {}
+      if (bootConfig.agents.defaults.workspace !== cwdWorkspace) {
+        bootConfig.agents.defaults.workspace = cwdWorkspace
+        writeOpenClawConfig(bootConfig)
+      }
+    }
+  }
   try {
     const seeded = seedDesktopWorkspaceFromConfig(bootConfig)
     if (seeded.created.length > 0) {

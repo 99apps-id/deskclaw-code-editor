@@ -1588,7 +1588,20 @@ export function registerIpcHandlers(deps: IpcHandlerDeps): void {
         }),
       )
       if (result.canceled || !result.filePaths[0]) return { path: null }
-      return { path: result.filePaths[0] }
+      const selectedPath = result.filePaths[0]
+      try {
+        const config = deps.readOpenClawConfig()
+        if (config) {
+          config.agents = config.agents ?? {}
+          config.agents.defaults = config.agents.defaults ?? {}
+          config.agents.defaults.workspace = selectedPath
+          deps.writeOpenClawConfig(config)
+          seedDesktopWorkspace(selectedPath)
+        }
+      } catch (err) {
+        console.warn(`[workspace] failed to sync openclaw workspace: ${err}`)
+      }
+      return { path: selectedPath }
     }),
   )
 
