@@ -120,7 +120,7 @@ export function CodeEditorPanel() {
 
   // Auto Save timer effect (1s debounce)
   useEffect(() => {
-    if (autoSave !== 'afterDelay' || !activeFile || !dirty) return
+    if (_autoSave !== 'afterDelay' || !activeFile || !dirty) return
     const timer = setTimeout(() => {
       const saveBtn = filesRef.current.find((f) => f.path === activePath)
       if (saveBtn) {
