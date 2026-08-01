@@ -8,6 +8,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getUserDataDir } from '../utils/paths.js'
+import { writeFileSecure } from '../utils/secure-file.js'
 
 const AUTH_STORE_VERSION = 1
 const AUTH_PROFILE_FILENAME = 'auth-profiles.json'
@@ -65,9 +66,7 @@ function loadExistingStore(): AuthProfileStore {
             version: parsed.version ?? AUTH_STORE_VERSION,
             profiles: parsed.profiles,
           }
-          const agentAuthDir = resolveAgentAuthDir()
-          fs.mkdirSync(agentAuthDir, { recursive: true })
-          fs.writeFileSync(storePath, JSON.stringify(store, null, 2) + '\n', 'utf-8')
+          writeFileSecure(storePath, JSON.stringify(store, null, 2) + '\n')
           return store as AuthProfileStore
         }
       }
@@ -103,10 +102,8 @@ export function migrateAuthProfilesIfNeeded(): void {
     const raw = fs.readFileSync(legacyPath, 'utf-8')
     const parsed = JSON.parse(raw)
     if (parsed && typeof parsed === 'object' && parsed.profiles && typeof parsed.profiles === 'object') {
-      const agentAuthDir = resolveAgentAuthDir()
-      fs.mkdirSync(agentAuthDir, { recursive: true })
       const store = { version: parsed.version ?? AUTH_STORE_VERSION, profiles: parsed.profiles }
-      fs.writeFileSync(canonicalPath, JSON.stringify(store, null, 2) + '\n', 'utf-8')
+      writeFileSecure(canonicalPath, JSON.stringify(store, null, 2) + '\n')
     }
   } catch {
     // migration failed, leave as-is
@@ -134,11 +131,8 @@ export function writeAuthProfile(
     ...(options?.metadata ? { metadata: options.metadata } : {}),
   }
 
-  const agentAuthDir = resolveAgentAuthDir()
-  fs.mkdirSync(agentAuthDir, { recursive: true })
-
   const storePath = resolveAuthStorePath()
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2) + '\n', 'utf-8')
+  writeFileSecure(storePath, JSON.stringify(store, null, 2) + '\n')
 }
 
 /**
@@ -152,8 +146,6 @@ export function writeAuthProfileToken(profileId: string, provider: string, token
     provider,
     token,
   }
-  const agentAuthDir = resolveAgentAuthDir()
-  fs.mkdirSync(agentAuthDir, { recursive: true })
   const storePath = resolveAuthStorePath()
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2) + '\n', 'utf-8')
+  writeFileSecure(storePath, JSON.stringify(store, null, 2) + '\n')
 }

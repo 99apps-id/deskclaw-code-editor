@@ -20,7 +20,7 @@ DeskClaw Code Editor adalah aplikasi desktop Electron (Windows/macOS/Linux) yang
 | **Unit test** | ✅ Lulus | 48/48 test lulus di 9 file (~1.1s) |
 | **Dependency audit** | 🔴 Perlu tindakan | 23 advisory (`pnpm audit`): 2 critical, 10 high, 8 moderate, 3 low — lihat §4 |
 | **Keamanan Electron** | ✅ Baik | `contextIsolation: true`, `nodeIntegration: false`, whitelist origin gateway |
-| **Penyimpanan kredensial** | 🟡 Perlu perbaikan | API key/token provider disimpan **plaintext** di `auth-profiles.json` |
+| **Penyimpanan kredensial** | ✅ Diperbaiki | `auth-profiles.json` tetap plaintext (kontrak gateway eksternal — lihat §3.1), tapi kini permission `0600`/`0700` owner-only |
 | **Cakupan test** | 🟡 Terbatas | Hanya 9 file test untuk ~171 file source (≈5%); nol test untuk IPC handlers (2000+ baris) |
 | **Dokumentasi** | ✅ Sangat baik | README, CHANGELOG, SECURITY.md, docs/ lengkap dan mutakhir |
 
@@ -47,14 +47,16 @@ DeskClaw Code Editor adalah aplikasi desktop Electron (Windows/macOS/Linux) yang
 
 ## 3. Temuan Keamanan Baru (Belum Ada di Audit Sebelumnya)
 
-### 3.1 🔴 Kredensial provider disimpan plaintext (Prioritas Tinggi)
-**File:** `src/main/providers/auth-profile-store.ts`
+### 3.1 ✅ DIPERBAIKI — Kredensial provider (plaintext di disk, sekarang dibatasi permission owner-only)
+**File:** `src/main/providers/auth-profile-store.ts`, `src/main/wizard/auth-profile-writer.ts`, `src/main/utils/secure-file.ts` (baru)
 
-API key dan token OAuth semua provider (OpenAI, Anthropic, MiniMax, Copilot-proxy, dll.) disimpan sebagai **JSON plaintext** di `auth-profiles.json` (`saveAuthProfile`/`saveAuthProfileToken`, baris 186-207). Tidak ada enkripsi at-rest — siapa pun (proses lain, backup cloud, malware lokal) yang bisa membaca `%USERPROFILE%\.openclaw\agents\main\agent\auth-profiles.json` mendapat semua API key dalam bentuk terbuka.
+API key dan token OAuth semua provider (OpenAI, Anthropic, MiniMax, Copilot-proxy, dll.) disimpan sebagai JSON di `auth-profiles.json`. Investigasi lanjutan menemukan bahwa file ini **bukan murni milik aplikasi Electron ini** — ia adalah kontrak on-disk yang dibaca langsung oleh proses gateway OpenClaw eksternal (binary terpisah yang di-download via `scripts/download-openclaw.ts`, bukan bagian dari repo ini) untuk autentikasi ke LLM provider. Ini dikonfirmasi oleh komentar di `openclaw-config.ts:251`: *"Gateway resolves upstream model auth as: auth-profiles.json → env → models.providers.*.apiKey"*, dan format filenya sengaja disamakan dengan output `openclaw onboard`.
 
-**Skenario kegagalan konkret:** file config di-backup ke cloud storage (OneDrive/Dropbox auto-sync folder home user) tanpa disadari pengguna → API key OpenAI/Anthropic bocor ke pihak ketiga yang punya akses ke akun cloud tersebut.
+**Kenapa `safeStorage` tidak bisa dipakai langsung di file ini:** ciphertext dari Electron `safeStorage` terikat ke entry OS-keychain milik aplikasi Electron ini sendiri. Proses gateway eksternal (binary Node/CLI terpisah) tidak punya cara mendekripsinya. Mengenkripsi `key`/`token` di file ini akan **mematahkan autentikasi ke semua provider AI secara diam-diam** untuk semua pengguna. Rerouting kredensial lewat environment variable saat spawn gateway juga tidak aman dilakukan di sini karena nama env var per-provider (terutama untuk custom/self-hosted provider) adalah kontrak internal gateway eksternal yang tidak terlihat dari kode di repo ini — hanya nama env var MiniMax yang diketahui (`MINIMAX_API_KEY`, `MINIMAX_CODE_PLAN_KEY`).
 
-**Rekomendasi:** gunakan `safeStorage` bawaan Electron (DPAPI di Windows, Keychain di macOS, libsecret di Linux) untuk mengenkripsi nilai `key`/`token` sebelum ditulis ke disk. Ini API built-in, tidak perlu dependency baru.
+**Perbaikan yang diterapkan:** file `auth-profiles.json` dan direktori induknya sekarang ditulis dengan permission owner-only (`0600` untuk file, `0700` untuk direktori) lewat helper baru `src/main/utils/secure-file.ts`, dipakai konsisten di kedua modul penulis (`auth-profile-store.ts` untuk UI Settings, `auth-profile-writer.ts` untuk setup wizard). Ini kompatibel penuh dengan gateway (proses yang sama, user OS yang sama, tetap bisa baca), sekaligus mencegah proses/pengguna OS lain di mesin yang sama membaca kredensial. `chmod` dijalankan ulang di setiap write, jadi file lama dengan permission longgar (mis. `0644`) otomatis diketatkan pada write berikutnya. Di Windows, langkah ini adalah no-op permission-wise (mengandalkan default ACL profil user), karena Node tidak punya API ACL native yang setara.
+
+**Rekomendasi lanjutan (opsional, effort lebih besar):** jika enkripsi at-rest penuh tetap diinginkan, jalur yang valid adalah refactor arsitektur — gateway di-spawn dari file konfigurasi generated on-the-fly oleh aplikasi ini setiap start (didekripsi dari store `safeStorage` terpisah tepat sebelum spawn), bukan menyimpan plaintext permanen. Ini butuh verifikasi terhadap source gateway asli agar tidak merusak resolusi auth untuk custom/self-hosted provider, jadi sengaja tidak dilakukan tanpa konfirmasi eksplisit dan test end-to-end terhadap gateway sungguhan.
 
 ### 3.2 🟡 String interpolation ke PowerShell command (Prioritas Sedang)
 **File:** `src/main/registry/skill-installer.ts:165-169`
@@ -125,7 +127,7 @@ Pemisahan `main/preload/renderer/shared` konsisten dan jelas. Modul di `src/main
 ## 6. Rekomendasi Prioritas
 
 ### Tinggi (lakukan sebelum rilis berikutnya)
-1. Enkripsi `auth-profiles.json` pakai Electron `safeStorage` (§3.1).
+1. ✅ **Selesai** — permission `auth-profiles.json` dibatasi owner-only (§3.1). Enkripsi penuh via `safeStorage` sengaja tidak dilakukan karena akan merusak resolusi auth gateway eksternal; lihat opsi refactor di §3.1 jika ini tetap diinginkan.
 2. Hapus dependency `xlsx` yang tidak terpakai (§4).
 3. Tambah test untuk `skill-installer.ts` dan `auth-profile-store.ts` — dua modul dengan blast radius keamanan terbesar tapi cakupan test nol.
 

@@ -5,6 +5,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { getUserDataDir } from '../utils/paths.js'
+import { writeFileSecure } from '../utils/secure-file.js'
 import { normalizeAuthOrderEntry } from './provider-config.js'
 
 const AUTH_STORE_VERSION = 1
@@ -60,10 +61,8 @@ function loadStore(): AuthProfileStore {
             version: parsed.version ?? AUTH_STORE_VERSION,
             profiles: parsed.profiles,
           } as AuthProfileStore
-          const agentAuthDir = resolveAgentAuthDir()
-          fs.mkdirSync(agentAuthDir, { recursive: true })
           const { store: migrated } = migrateShorthandProfileKeys(store)
-          fs.writeFileSync(storePath, JSON.stringify(migrated, null, 2) + '\n', 'utf-8')
+          writeFileSecure(storePath, JSON.stringify(migrated, null, 2) + '\n')
           return migrated
         }
       }
@@ -91,10 +90,8 @@ function loadStore(): AuthProfileStore {
 }
 
 function saveStore(store: AuthProfileStore): void {
-  const agentAuthDir = resolveAgentAuthDir()
-  fs.mkdirSync(agentAuthDir, { recursive: true })
   const storePath = resolveAuthStorePath()
-  fs.writeFileSync(storePath, JSON.stringify(store, null, 2) + '\n', 'utf-8')
+  writeFileSecure(storePath, JSON.stringify(store, null, 2) + '\n')
 }
 
 /**
