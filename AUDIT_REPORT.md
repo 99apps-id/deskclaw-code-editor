@@ -1,437 +1,149 @@
-# OpenClaw Desktop Plus - Repository Audit Report
+# DeskClaw Code Editor — Laporan Audit Repository
 
-**Date:** 2026-07-25  
-**Repository:** `99apps-id/openclaw-desktop-plus`  
-**Current Version:** `0.9.0+openclaw.2026.7.1-2`  
-**Audit Performed By:** ZCode Agent
+**Tanggal:** 2026-08-01
+**Repository:** `99apps-id/deskclaw-code-editor`
+**Versi saat ini:** `0.1.1+deskclaw.2026.7.1` (bundle OpenClaw `2026.7.1-2`)
+**Metodologi:** Audit statis + eksekusi nyata (`pnpm install`, `type-check`, `lint`, `test`, `pnpm audit`) pada HEAD (`6bc6165`)
 
----
-
-## Executive Summary
-
-OpenClaw Desktop Plus is a **community-maintained Windows Electron desktop application** that serves as a shell and installer for the OpenClaw AI agent platform. The project demonstrates solid engineering practices with proper security measures, test coverage, and maintainability features.
-
-### Quick Findings
-
-| Category | Status | Notes |
-|----------|--------|-------|
-| **Security** | ✅ Good | Context isolation enabled, proper IPC handling, CSP relaxation for gateway embed |
-| **Test Coverage** | ⚠️ Partial | 6 test files covering key areas but limited integration tests |
-| **Documentation** | ✅ Excellent | Comprehensive README, CHANGELOG, SECURITY policy, dev docs |
-| **Build/Packaging** | ✅ Solid | NSIS installer, code signing support, version pinning |
-| **Recent Changes** | 🟡 Active | 18 modified files - adding device pairing feature |
+> Catatan: laporan ini menggantikan `AUDIT_REPORT.md` versi sebelumnya (2026-07-25), yang ditulis untuk nama proyek lama (`openclaw-desktop-plus`) dan tidak memverifikasi klaimnya dengan menjalankan tooling. Semua temuan di bawah diverifikasi langsung terhadap kode dan hasil build/test aktual.
 
 ---
 
-## 1. Project Overview
+## 1. Ringkasan Eksekutif
 
-### 1.1 Architecture
+DeskClaw Code Editor adalah aplikasi desktop Electron (Windows/macOS/Linux) yang membungkus editor Monaco + terminal + Git/GitHub tooling di sekitar agent AI otonom OpenClaw, dengan Control UI gateway yang di-embed sebagai iframe. Basis kode ~34.000 baris TypeScript/TSX di 171 file, terbagi rapi antara `main` (Electron), `preload`, `renderer` (React 19), dan `shared`.
 
-```
-┌─────────────────────────────────────────────┐
-│           OpenClaw Desktop Plus             │
-│  Electron shell · native panels · tray      │
-│         embedded Control UI iframe          │
-└──────────┬──────────────────┬───────────────┘
-           │                  │
-    local gateway      remote gateway
-    (bundled child)    (VPS / Tailscale / SSH)
-           │                  │
-           └────────┬─────────┘
-                    │
-           %USERPROFILE%\.openclaw\
-```
+| Kategori | Status | Catatan |
+|---|---|---|
+| **Build/Type-check** | ✅ Lulus | `tsc --noEmit` bersih, tanpa error |
+| **Lint** | ✅ Lulus | `eslint .` bersih, tanpa warning/error |
+| **Unit test** | ✅ Lulus | 48/48 test lulus di 9 file (~1.1s) |
+| **Dependency audit** | 🔴 Perlu tindakan | 23 advisory (`pnpm audit`): 2 critical, 10 high, 8 moderate, 3 low — lihat §4 |
+| **Keamanan Electron** | ✅ Baik | `contextIsolation: true`, `nodeIntegration: false`, whitelist origin gateway |
+| **Penyimpanan kredensial** | 🟡 Perlu perbaikan | API key/token provider disimpan **plaintext** di `auth-profiles.json` |
+| **Cakupan test** | 🟡 Terbatas | Hanya 9 file test untuk ~171 file source (≈5%); nol test untuk IPC handlers (2000+ baris) |
+| **Dokumentasi** | ✅ Sangat baik | README, CHANGELOG, SECURITY.md, docs/ lengkap dan mutakhir |
 
-### 1.2 Key Components
-
-| Module | Purpose | File Count |
-|--------|---------|------------|
-| `src/main/` | Electron main process | 20+ dirs |
-| `src/renderer/` | React + Tailwind UI | 13 dirs |
-| `src/shared/` | Types, IPC channels | 10 files |
-| `src/preload/` | Bridge API | 1 file |
-| `scripts/` | Build & CI tools | 10+ scripts |
-
-### 1.3 Dependencies
-
-- **Runtime:** Electron v41, React 19, Node.js >= 22.22.3
-- **UI:** Radix UI, Lucide icons, Tailwind CSS v4
-- **Dev Tools:** TypeScript 5.9, Vitest, ESLint 9
-- **Packaging:** electron-builder 26, NSIS installer
+**Grade keseluruhan: B** — arsitektur dan hygiene kode solid, tapi ada gap nyata di penyimpanan kredensial dan dependency dev yang membawa CVE lama.
 
 ---
 
-## 2. Security Assessment
+## 2. Yang Sudah Diverifikasi Berjalan Baik
 
-### 2.1 ✅ Strengths
+### 2.1 Isolasi proses Electron
+`src/main/window/manager.ts:185-187` — `contextIsolation: true`, `nodeIntegration: false`, akses Node hanya lewat `contextBridge` di preload. Ini adalah baseline keamanan Electron yang benar dan masih berlaku di HEAD.
 
-#### 2.1.1 Process Isolation
+### 2.2 Validasi origin/token gateway
+`src/main/security/gateway-request-auth.ts` — hanya menyisipkan token ke request yang: (a) protokolnya di whitelist (`http/https/ws/wss`), (b) host-nya loopback (`127.0.0.1`/`localhost`/`::1`), (c) port cocok dengan port gateway yang diharapkan, (d) belum punya parameter `token` (anti double-injection). Logikanya defensif dan tervalidasi di kode aktual.
+
+### 2.3 Ekstraksi workspace pack aman
+`src/main/workspace/workspace-memory.ts` — daftar file yang boleh diekspor/diimpor pakai allowlist (`PACK_FILES`), dengan penolakan path yang mengandung `..` atau diawali `/`. Ini mencegah path traversal saat mengekspor/mengimpor memory pack.
+
+### 2.4 Kualitas kode
+- `tsc --noEmit` dan `eslint .` bersih total di HEAD — tidak ada technical debt "diam-diam menumpuk".
+- 48 unit test lulus, mencakup: agregasi usage insights, model-ref normalization, config migration, file-service, model health signal, gateway-remote logic.
+
+---
+
+## 3. Temuan Keamanan Baru (Belum Ada di Audit Sebelumnya)
+
+### 3.1 🔴 Kredensial provider disimpan plaintext (Prioritas Tinggi)
+**File:** `src/main/providers/auth-profile-store.ts`
+
+API key dan token OAuth semua provider (OpenAI, Anthropic, MiniMax, Copilot-proxy, dll.) disimpan sebagai **JSON plaintext** di `auth-profiles.json` (`saveAuthProfile`/`saveAuthProfileToken`, baris 186-207). Tidak ada enkripsi at-rest — siapa pun (proses lain, backup cloud, malware lokal) yang bisa membaca `%USERPROFILE%\.openclaw\agents\main\agent\auth-profiles.json` mendapat semua API key dalam bentuk terbuka.
+
+**Skenario kegagalan konkret:** file config di-backup ke cloud storage (OneDrive/Dropbox auto-sync folder home user) tanpa disadari pengguna → API key OpenAI/Anthropic bocor ke pihak ketiga yang punya akses ke akun cloud tersebut.
+
+**Rekomendasi:** gunakan `safeStorage` bawaan Electron (DPAPI di Windows, Keychain di macOS, libsecret di Linux) untuk mengenkripsi nilai `key`/`token` sebelum ditulis ke disk. Ini API built-in, tidak perlu dependency baru.
+
+### 3.2 🟡 String interpolation ke PowerShell command (Prioritas Sedang)
+**File:** `src/main/registry/skill-installer.ts:165-169`
+
 ```typescript
-// src/main/window/manager.ts:181
-webPreferences: {
-  contextIsolation: true,
-  nodeIntegration: false,
-  sandbox: false, // Explicitly set
-}
-```
-- **Context isolation enabled** - Prevents DOM exposure to Node.js APIs
-- **Node integration disabled** - Renderer cannot execute Node code directly
-- **Preload script bridge** - All IPC goes through controlled `contextBridge`
-
-#### 2.1.2 Gateway Request Authentication
-```typescript
-// src/main/security/gateway-request-auth.ts
-const LOOPBACK_GATEWAY_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
-const GATEWAY_REQUEST_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:'])
-```
-- Whitelist-only host validation
-- Protocol filtering
-- Port matching prevents DNS rebinding attacks
-
-#### 2.1.3 CSP Handling for Embedded Control UI
-```typescript
-// src/main/security/gateway-response-headers.ts
-export const RELAXED_GATEWAY_FRAME_ANCESTORS =
-  "frame-ancestors 'self' file: openclaw-shell://renderer http://localhost:* ..."
-```
-- Properly relaxes X-Frame-Options for legitimate embedding
-- Blocks non-loopback origins
-- Adds missing directives (`worker-src`, `connect-src`)
-
-#### 2.1.4 Safe Workspace Import
-```typescript
-// src/main/workspace/workspace-memory.ts
-const PACK_FILES = Object.freeze([
-  'SOUL.md', 'MEMORY.md', 'HEARTBEAT.md', 'IDENTITY.md', ...
+const psResult = spawnSync('powershell', [
+  '-NoProfile', '-Command',
+  `Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force`,
 ])
-
-function safePackName(name: string): string | null {
-  if (normalized.includes('..') || normalized.startsWith('/')) return null
-  if (!PACK_FILES.includes(normalized)) return null
-  return normalized
-}
 ```
-- Allowlist-based extraction (not recursive unzip)
-- Parent directory traversal prevention
-- Path normalization before validation
 
-### 2.2 ⚠️ Areas for Improvement
+`zipPath`/`extractDir` dibangun dari `skillsDir` (user data dir) + `skillName` yang sudah di-sanitize regex whitelist (`sanitizeName`), jadi risiko terbatas pada kasus di mana **path direktori home Windows pengguna sendiri** mengandung karakter kutip tunggal (`'`) — jarang tapi bukan nol (mis. nama pengguna Windows dengan apostrof). Karena string disisipkan langsung ke `-Command` (bukan lewat parameter terpisah), karakter kutip bisa memutus string PowerShell.
 
-#### 2.2.1 `'unsafe-inline'` in CSP
-```typescript
-// src/main/security/gateway-response-headers.ts:70
-extras.push("style-src 'self' 'unsafe-inline'")
-```
-**Risk:** Low-Medium - Could allow XSS if untrusted CSS is loaded
+**Rekomendasi:** ganti ke argumen terpisah / gunakan `-EncodedCommand`, atau escape kutip tunggal dengan `''` sebelum interpolasi.
 
-**Recommendation:** 
-- Use Content-Security-Policy nonce or hash mechanism for inline styles
-- Alternatively, extract inline styles to external stylesheet
+### 3.3 🟡 Instalasi skill dari URL eksternal = supply-chain surface
+**File:** `src/main/registry/skill-installer.ts` (seluruh file)
 
-#### 2.2.2 Token-in-URL Pattern
-```typescript
-// src/main/security/gateway-request-auth.ts
-url.searchParams.set('token', token)
-```
-**Risk:** Medium - Tokens in URLs can be logged in browser history, server logs, Referer header
+Fitur "ClawHub Skill Marketplace" mengizinkan instalasi skill dari GitHub repo/Gist/`skill.sh`/raw URL apa pun ke direktori skill lokal yang kemudian dibaca sebagai instruksi oleh agent AI. Ini secara desain adalah **prompt-injection / supply-chain vector** — skill pihak ketiga yang di-install dapat berisi instruksi yang memanipulasi perilaku agent OpenClaw. Ini bukan bug (fitur marketplace memang begitu), tapi tidak ada indikasi sandboxing/review terhadap konten `SKILL.md` yang diunduh sebelum dipakai agent.
 
-**Recommendation:**
-- Consider using Authorization header instead for sensitive operations
-- If URL params required, ensure HTTPS-only transmission and short expiry
+**Rekomendasi:** tambahkan tinjauan/preview isi skill sebelum instalasi final (sudah ada di UI?), dan pertimbangkan menandai skill yang diinstal dari sumber non-official ClawHub secara visual berbeda di UI.
 
-#### 2.2.3 Missing Input Validation on User Paths
-```typescript
-// src/main/wizard/model-settings-load.js (referenced but not audited)
-```
-**Risk:** Potential path injection if user-provided paths not validated
-
-**Recommendation:** Ensure all workspace/user paths go through sanitization
-
-### 2.3 🔒 Sensitive Data Handling
-
-| Asset | Location | Protection Level |
-|-------|----------|------------------|
-| API Keys | `auth-profiles.json` | Encrypted? Not documented |
-| Pairing Codes | Local filesystem | Temporary, session-scoped |
-| Gateway Token | Config file | Optional auth, not encrypted at rest |
-
-**Recommendation:** Document encryption strategy for credential storage (keytar, DPAPI, etc.)
+### 3.4 Konfirmasi ulang temuan lama (masih berlaku)
+- `'unsafe-inline'` di `style-src` CSP untuk gateway (`gateway-response-headers.ts`) — risiko rendah-menengah, masih ada.
+- Token diselipkan sebagai query-param URL (`?token=...`) alih-alih header — masih berlaku, tapi dibatasi ke loopback saja (lihat §2.2), jadi eksposur terbatas ke proses lokal yang bisa membaca URL (mis. logging).
 
 ---
 
-## 3. Code Quality Analysis
+## 4. Dependency Audit (`pnpm audit`)
 
-### 3.1 Recent Changes (Git Diff Summary)
+**23 advisory: 2 critical, 10 high, 8 moderate, 3 low.** Rinciannya:
 
-**Modified Files:** 18  
-**New Features:** Device Pairing System
+| Severity | Paket | Rantai dependency | Dampak riil |
+|---|---|---|---|
+| High/High | `xlsx@0.18.5` | **dependency langsung**, tapi **tidak dipakai di `src/`** (grep kosong) | Prototype pollution + ReDoS — tapi dead code di runtime app |
+| High | `adm-zip` | devDependency, dipakai hanya di `scripts/download-node.ts` (build-time) | 4GB memory alloc dari ZIP jahat — bukan attack surface end-user karena build-time only |
+| High | `sharp` | devDependency, dipakai untuk generate icon (build-time) | CVE libvips — build-time only |
+| High×2, Critical×2, Moderate×5 | `jimp`/`request`/`form-data`/`qs`/`tough-cookie`/`minimist`/`uuid` | transitif lewat `to-ico → resize-img → jimp` (devDependency, build-time icon generation) | Tidak reachable dari kode aplikasi yang di-ship ke user |
+| High | `brace-expansion` | transitif lewat `electron-builder` (build-time) | Tidak reachable saat runtime app |
+| Low×3 | `dompurify` | transitif lewat `monaco-editor` (**runtime**, dipakai untuk render markdown editor) | Worth memantau, tapi severity rendah dan butuh HTML tak terpercaya sampai ke DOMPurify config API |
+| Low | `esbuild` | devDependency (dev server) | Hanya relevan saat `pnpm dev`, bukan build produksi |
 
-#### New Feature: Device Pairing
-```typescript
-// src/shared/ipc-channels.ts
-export const IPC_DEVICE_PAIRING_LIST = 'devicePairing:list' as const
-export const IPC_DEVICE_PAIRING_APPROVE = 'devicePairing:approve' as const
-```
+**Poin penting:** hampir semua advisory *high/critical* berada di rantai `to-ico → resize-img → jimp` (devDependency untuk generate icon `.ico`) dan `electron-builder` — **tidak masuk ke output paket yang dijalankan end-user** karena tidak pernah di-bundle ke `out/`. Risiko nyata jauh lebih rendah dari sekadar membaca angka "2 critical, 10 high".
 
-**Implementation Scope:**
-- ✅ New IPC handlers in `src/main/ipc/handlers.ts`
-- ✅ Preload bridge in `src/preload/index.ts`
-- ✅ Type definitions in `src/shared/types.ts`
-- ✅ UI integration in `App.tsx` and `EmbeddedShellLayout.tsx`
-- ⚠️ No dedicated test file yet
-
-#### Configuration Migration Enhancements
-```typescript
-// src/main/config/openclaw-config.ts
-function migrateMinimaxAuthHeaderToXApiKey(...)
-function migrateAnthropicThirdPartyAuthHeader(...)
-function migrateAgentToolsDefaults(...)
-```
-- Automatic migration of deprecated config formats
-- MiniMax API compatibility fixes
-- Default tool enablement for agents
-
-### 3.2 Test Coverage
-
-| Test File | Coverage Area | Status |
-|-----------|---------------|--------|
-| `usage-insights.test.ts` | Session data aggregation | ✅ Good |
-| `workspace-memory.test.ts` | Preferences/Memory export | ✅ Good |
-| `model-health-signal.test.ts` | Health pattern detection | ✅ Basic |
-| `gateway-remote.test.ts` | Remote gateway logic | ✅ Present |
-| `control-ui-flags.test.ts` | Embedded UI flags | ✅ Present |
-| `model-ref.test.ts` | Model ID normalization | ✅ Present |
-
-**Gaps:**
-- ❌ No device pairing tests
-- ❌ Limited IPC handler tests
-- ❌ No E2E/smoke tests beyond gateway status checks
-- ❌ No security regression tests
-
-### 3.3 Type Safety
-
-```typescript
-// Strict type usage throughout
-type ModelHealthSignal =
-  | { kind: 'failover'; detail: string }
-  | { kind: 'primary_down'; detail: string }
-  | { kind: 'rate_limited'; detail: string }
-  | null
-```
-- ✅ Discriminated unions for state machines
-- ✅ Generic-safe patterns
-- ✅ TypeScript strict mode apparent from code style
+**Yang justru perlu tindakan nyata:**
+1. **`xlsx` (dependency langsung, bukan dev)** — tidak dipakai sama sekali di `src/`. Hapus dari `package.json` untuk mengurangi attack surface dan ukuran bundle tanpa kehilangan fungsi apa pun.
+2. **`to-ico`** (rantai jimp/request yang usang, request sudah deprecated sejak 2020) — pertimbangkan ganti dengan `sharp`-only pipeline untuk generate `.ico` (sharp sudah ada sebagai dependency), menghilangkan seluruh rantai `jimp/request/form-data/qs/tough-cookie/minimist/uuid`.
+3. **`sharp`** — update ke versi terbaru yang menambal CVE libvips yang disebutkan (`CVE-2026-33327/33328/35590/35591`).
 
 ---
 
-## 4. Build & Packaging
+## 5. Kualitas Kode & Test Coverage
 
-### 4.1 Packaging Configuration
+### 5.1 Test yang ada (9 file, 48 test — semua lulus)
+`control-ui-flags`, `model-ref`, `usage-insights`, `gateway-remote`, `file-service`, `openclaw-config`, `workspace-memory`, `explorer-layout`, `model-health-signal`.
 
-```javascript
-// electron-builder.config.cjs
-module.exports = {
-  appId: 'com.openclaw.desktop-plus',
-  productName: 'OpenClaw Desktop Plus',
-  asar: true,
-  asarUnpack: ['out/renderer/**', 'out/preload/**'],
-  win: {
-    target: [{ target: 'nsis', arch: ['x64'] }],
-    signExts: ['exe', 'dll'],
-  },
-}
-```
+### 5.2 Gap cakupan test
+- **`src/main/ipc/handlers.ts`** (2207 baris gabungan dengan index.ts) — pusat seluruh IPC surface (termasuk device pairing, terminal spawn, file ops) — **nol test**.
+- **`src/main/registry/skill-installer.ts`** — parsing URL + ekstraksi arsip pihak ketiga — **nol test**, padahal ini permukaan paling sensitif secara keamanan (lihat §3.3).
+- **`src/main/providers/auth-profile-store.ts`** — logic migrasi kredensial (§3.1) — **nol test**.
+- Tidak ada test E2E/integrasi di luar smoke test CSP & gateway process.
 
-**Strengths:**
-- ✅ ASAR packing reduces bundle size
-- ✅ Renderer unpacked for file:// protocol access
-- ✅ NSIS installer with multi-language support
-- ✅ Auto-updater integration (`electron-updater`)
-
-**Configuration Notes:**
-```bash
-# Unsigned builds (for development)
-pnpm run package:win
-
-# Signed builds (requires CSC_LINK env var)
-pnpm run package:win:signed
-```
-
-### 4.2 Version Management
-
-| Component | Pinning Strategy | Current |
-|-----------|------------------|---------|
-| Electron | Exact (^41.0.0) | 41.x |
-| React | Exact (^19.0.0) | 19.x |
-| OpenClaw Gateway | Bundle manifest | 2026.7.1-2 |
-| Node.js | Bundled portable | 22.23.1 |
-
-**Best Practice:** Bundle-specific versions prevent runtime drift
-
-### 4.3 CI/CD Pipeline
-
-**Available Scripts:**
-```json
-{
-  "package:prepare-deps": "Download Node + OpenClaw bundles",
-  "verify-bundle": "Check bundled resources completeness",
-  "smoke:csp": "Validate gateway CSP headers",
-  "smoke:gateway": "Test gateway process lifecycle"
-}
-```
-
-**Smoke Tests:**
-- ✅ CSP header validation
-- ✅ Gateway process management
-- ⚠️ No automated release tests found
+### 5.3 Arsitektur
+Pemisahan `main/preload/renderer/shared` konsisten dan jelas. Modul di `src/main/` dipecah per domain (`gateway`, `pairing`, `providers`, `security`, `workspace`, dst.) — struktur yang mudah dinavigasi untuk basis kode sebesar ini.
 
 ---
 
-## 5. Documentation Audit
+## 6. Rekomendasi Prioritas
 
-### 5.1 Documentation Completeness
+### Tinggi (lakukan sebelum rilis berikutnya)
+1. Enkripsi `auth-profiles.json` pakai Electron `safeStorage` (§3.1).
+2. Hapus dependency `xlsx` yang tidak terpakai (§4).
+3. Tambah test untuk `skill-installer.ts` dan `auth-profile-store.ts` — dua modul dengan blast radius keamanan terbesar tapi cakupan test nol.
 
-| Doc | Status | Coverage |
-|-----|--------|----------|
-| `README.md` | ✅ Excellent | Product overview, architecture, FAQ |
-| `CHANGELOG.md` | ✅ Active | Last update: 2026-07-25 |
-| `SECURITY.md` | ✅ Present | Vulnerability reporting流程 |
-| `CONTRIBUTING.md` | ✅ Present | Development guidelines |
-| `docs/DEVELOPMENT.md` | ✅ Present | Local setup instructions |
-| `docs/PACKAGING.md` | ✅ Present | Build process guide |
-| `ZCODE.md` | ✅ Custom | Windows-specific tooling notes |
+### Sedang
+4. Perbaiki interpolasi string ke PowerShell `-Command` di `skill-installer.ts` (§3.2).
+5. Ganti pipeline `to-ico`/`jimp` dengan `sharp`-only untuk menghapus rantai dependency usang (§4).
+6. Update `sharp` ke versi tertambal CVE libvips terbaru.
+7. Tambah test untuk `src/main/ipc/handlers.ts` (minimal untuk device pairing & terminal spawn).
 
-### 5.2 In-Code Documentation
-
-**Quality Indicators:**
-- ✅ JSDoc comments on public functions
-- ✅ Inline explanations for complex migrations
-- ✅ TypeScript type annotations clear and complete
-
-**Example:**
-```typescript
-/**
- * Read OpenClaw main config.
- * - Missing file → {}
- * - Parse error → {} + warning
- */
-export function readOpenClawConfig(): OpenClawConfig {
-```
+### Rendah
+8. Migrasi `style-src 'unsafe-inline'` ke nonce-based CSP untuk Control UI embed.
+9. Dokumentasikan strategi keamanan skill marketplace pihak ketiga di `SECURITY.md` (siapa yang mereview konten skill sebelum diinstal).
 
 ---
 
-## 6. Issues & Recommendations
+## 7. Kesimpulan
 
-### 6.1 High Priority
-
-#### #6.1.1 Add Device Pairing Tests
-**Issue:** New pairing feature lacks test coverage  
-**Impact:** Regression risk during future changes  
-**Recommendation:** Create `device-pairing.test.ts` mocking `GatewayRpcClient`
-
-#### #6.1.2 Document Credential Encryption
-**Issue:** No documentation on how API keys are stored/encrypted  
-**Impact:** Security audit gap, user trust issue  
-**Recommendation:** Add section to `SECURITY.md` explaining `auth-profiles.json` protection
-
-#### #6.1.3 Add Integration Tests
-**Issue:** Only unit-level tests exist  
-**Impact:** Cannot catch integration bugs between modules  
-**Recommendation:** Implement vitest-based integration tests for IPC flow
-
-### 6.2 Medium Priority
-
-#### #6.2.1 Refactor `'unsafe-inline'` CSP
-**Issue:** Inline styles bypass CSP protections  
-**Impact:** Potential XSS vector if combined with other weaknesses  
-**Recommendation:** Migrate to nonce-based inline script/style injection
-
-#### #6.2.2 Standardize Error Handling
-**Issue:** Mixed use of try/catch and error propagation  
-**Impact:** Some errors may not be properly logged or surfaced  
-**Recommendation:** Define central error handling middleware for IPC handlers
-
-#### #6.2.3 Add Resource Leak Monitoring
-**Issue:** Long-running Electron app, no visible leak tracking  
-**Impact:** Memory growth over time possible  
-**Recommendation:** Add periodic memory stats logging via Electron DevTools protocol
-
-### 6.3 Low Priority
-
-#### #6.3.1 Improve Test Coverage Percentage
-**Target:** ≥ 70% line coverage  
-**Current:** ~30-40% (estimated)  
-**Method:** Use `vitest --coverage`
-
-#### #6.3.2 Add Visual Regression Tests
-**Target:** Catch UI regressions in critical flows  
-**Tool:** Percy, Chromatic, or Playwright screenshot comparisons
+Repo ini dalam kondisi sehat dari sisi hygiene teknis: tidak ada error type-check/lint, semua test lulus, dan pola isolasi Electron sudah benar. Perhatian utama bukan pada "kerentanan aktif yang dieksploitasi", melainkan **penyimpanan kredensial plaintext** (temuan baru, prioritas tinggi) dan **dependency devDependency usang** yang menyumbang mayoritas hitungan `pnpm audit` tapi berdampak minim di runtime karena tidak ter-bundle. Prioritaskan §6 "Tinggi" sebelum rilis publik berikutnya.
 
 ---
-
-## 7. Git Status Summary
-
-### 7.1 Uncommitted Changes
-
-```bash
-M src/main/config/openclaw-config.ts         # +36 lines (migrations)
-M src/main/ipc/handlers.ts                   # +48 lines (pairing)
-M src/preload/index.ts                       # +7 lines (bridge)
-M src/renderer/App.tsx                       # +5 lines (new panel)
-M src/renderer/shell/EmbeddedShellLayout.tsx # +1 line (panel type)
-M src/shared/electron-api.d.ts               # +4 lines (API types)
-M src/shared/ipc-channels.ts                 # +8 lines (channels)
-M src/shared/types.ts                        # +29 lines (pairing types)
-```
-
-**Net Impact:** ~135 additions, minimal deletions  
-**Change Type:** Feature addition (Device Pairing) + configuration enhancements
-
-### 7.2 Untracked Files
-
-| File | Status | Purpose |
-|------|--------|---------|
-| `.zcode/` | Untracked | Agent-generated workspace |
-| `ZCODE.md` | Untracked | Custom tooling instructions |
-| `scripts/safe-patch.mjs` | Untracked | Windows-friendly edit utility |
-| `src/renderer/shell/DevicePairingView.tsx` | Untracked | New UI component |
-| `*.bak`, `*.new*` | Untracked | Temporary backup files |
-
-**Cleanup Recommendation:** Remove backup files before finalizing release
-
----
-
-## 8. Conclusion
-
-### 8.1 Overall Grade: **B+ (Good)**
-
-| Dimension | Score | Justification |
-|-----------|-------|---------------|
-| Security | A- | Strong isolation, minor CSP concerns |
-| Code Quality | B+ | Well-typed, good doc, some test gaps |
-| Documentation | A | Comprehensive and current |
-| Maintainability | A- | Clear module boundaries, migrations work |
-| Testing | C+ | Present but incomplete |
-
-### 8.2 Next Steps
-
-1. **Immediate:** Review device pairing implementation PR before merge
-2. **Short-term:** Add missing tests, document credential encryption
-3. **Medium-term:** Increase test coverage to 70%, add integration tests
-4. **Long-term:** Automate visual regression testing, consider TypeScript strictness enforcement
-
-### 8.3 Security Posture
-
-The project implements **defense-in-depth** principles appropriately for a community desktop app:
-- Process isolation ✓
-- Input validation ✓
-- Origin verification ✓
-- Safe file extraction ✓
-
-**Critical Finding:** No evidence of security vulnerabilities in audited code. The main improvement area is documenting the encryption strategy for stored credentials.
-
----
-
-**End of Audit Report**
-
-For questions or clarification, refer to specific sections above or request detailed code review of flagged areas.
+*Audit ini dijalankan dengan tooling nyata (`pnpm install/type-check/lint/test/audit`) terhadap commit `6bc6165` di branch `claude/repo-audit-analysis-bpv135`, bukan hanya pembacaan statis kode.*
