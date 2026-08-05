@@ -1,437 +1,153 @@
-# OpenClaw Desktop Plus - Repository Audit Report
+# DeskClaw Code Editor - Repository Audit Report
 
-**Date:** 2026-07-25  
-**Repository:** `99apps-id/openclaw-desktop-plus`  
-**Current Version:** `0.9.0+openclaw.2026.7.1-2`  
-**Audit Performed By:** ZCode Agent
+**Date:** 2026-08-05
+**Repository:** `99apps-id/deskclaw-code-editor`
+**Current Version:** `0.1.1+deskclaw.2026.7.1`
+**Audit Performed By:** Claude (Claude Code)
+
+> Replaces the previous `AUDIT_REPORT.md`, which was a copy of the `openclaw-desktop-plus` report and did not describe this repository.
 
 ---
 
 ## Executive Summary
 
-OpenClaw Desktop Plus is a **community-maintained Windows Electron desktop application** that serves as a shell and installer for the OpenClaw AI agent platform. The project demonstrates solid engineering practices with proper security measures, test coverage, and maintainability features.
+DeskClaw Code Editor is an **AI-native code editor / IDE** (Windows, macOS, Linux) built on Electron + Monaco, powered by an embedded, autonomous **OpenClaw** agent (chat panel, inline `Ctrl+K` edit, commit-message generation, ClawHub skill marketplace, GitHub tooling). This audit re-verified the bundled OpenClaw version against the npm registry, ran a dependency security audit, and reviewed the codebase structure.
 
 ### Quick Findings
 
 | Category | Status | Notes |
 |----------|--------|-------|
-| **Security** | ✅ Good | Context isolation enabled, proper IPC handling, CSP relaxation for gateway embed |
-| **Test Coverage** | ⚠️ Partial | 6 test files covering key areas but limited integration tests |
-| **Documentation** | ✅ Excellent | Comprehensive README, CHANGELOG, SECURITY policy, dev docs |
-| **Build/Packaging** | ✅ Solid | NSIS installer, code signing support, version pinning |
-| **Recent Changes** | 🟡 Active | 18 modified files - adding device pairing feature |
+| **OpenClaw bundle version** | ✅ Current | `openclawBundleVersion` (`2026.7.1-2`) matches npm `openclaw@latest` as of 2026-08-05 |
+| **Dependency security** | ✅ Fixed | `pnpm audit --prod` found 3 advisories (dompurify via `monaco-editor`); patched via pnpm override, now clean |
+| **Version consistency** | ✅ Pass | `scripts/check-openclaw-versions.ts` reports pin, bundle-manifest, and shell version all aligned |
+| **Type safety** | ✅ Pass | `pnpm run type-check` clean |
+| **Test Coverage** | ⚠️ Partial | 9 test files, mostly in `src/main` and `src/shared`; renderer/editor UI surface is thin |
+| **Documentation** | ✅ Good | README, CHANGELOG, PRODUCT.md, CONTRIBUTING, SECURITY present |
 
 ---
 
-## 1. Project Overview
-
-### 1.1 Architecture
+## 1. OpenClaw Upstream Version Check
 
 ```
-┌─────────────────────────────────────────────┐
-│           OpenClaw Desktop Plus             │
-│  Electron shell · native panels · tray      │
-│         embedded Control UI iframe          │
-└──────────┬──────────────────┬───────────────┘
-           │                  │
-    local gateway      remote gateway
-    (bundled child)    (VPS / Tailscale / SSH)
-           │                  │
-           └────────┬─────────┘
-                    │
-           %USERPROFILE%\.openclaw\
+$ npm view openclaw version
+2026.7.1-2
+
+$ pnpm exec tsx scripts/check-openclaw-versions.ts
+check-openclaw-versions: expected OpenClaw 2026.7.1-2
+  [registry] npm openclaw@latest → 2026.7.1-2
+  [ok] openclaw bundle pin matches npm openclaw@latest
+  [ok] bundle-manifest shellVersion → 0.1.1+deskclaw.2026.7.1
+  [ok] bundle-manifest bundledOpenClawVersion → 2026.7.1-2
+  OK: OpenClaw version pins and on-disk refs are aligned
 ```
 
-### 1.2 Key Components
+**Conclusion:** `openclawBundleVersion` already tracks npm's `latest` dist-tag for the `openclaw` package (same pin as the sibling `openclaw-desktop-plus` repo, since both bundle the upstream agent gateway). **No version bump is required or possible right now.**
 
-| Module | Purpose | File Count |
-|--------|---------|------------|
-| `src/main/` | Electron main process | 20+ dirs |
-| `src/renderer/` | React + Tailwind UI | 13 dirs |
-| `src/shared/` | Types, IPC channels | 10 files |
-| `src/preload/` | Bridge API | 1 file |
-| `scripts/` | Build & CI tools | 10+ scripts |
+### 1.1 Upstream release channel context (npm `openclaw` dist-tags, checked 2026-08-05)
 
-### 1.3 Dependencies
+| Tag | Version | Published | Notes |
+|-----|---------|-----------|-------|
+| `latest` | `2026.7.1-2` | 2026-07-18 | What this repo bundles |
+| `beta` | `2026.7.2-beta.7` | 2026-08-02 | Pre-release; not recommended for production bundling |
+| `extended-stable` | `2026.6.34` | 2026-08-04 | Older LTS-style line |
+| `alpha` | `2026.5.19-alpha.1` | — | Experimental |
 
-- **Runtime:** Electron v41, React 19, Node.js >= 22.22.3
-- **UI:** Radix UI, Lucide icons, Tailwind CSS v4
-- **Dev Tools:** TypeScript 5.9, Vitest, ESLint 9
-- **Packaging:** electron-builder 26, NSIS installer
+**Features landing in the `2026.7.2` beta line** (roadmap awareness — not bundled yet): state-safety/crash-recovery for persisted agent data, durable channel delivery, session rewind/branching, MCP Apps, structured questions, and coding-agent integration improvements (`openclaw attach` for external editors, better long-running session/goal support) — the last of which is directly relevant to this editor's own agent-chat and inline-edit features and worth prioritizing once it reaches `latest`.
+
+**Recommendation:** re-run `pnpm run check-openclaw-versions -- --align-latest` once `2026.7.2` promotes off `beta`.
 
 ---
 
-## 2. Security Assessment
+## 2. Dependency & Security Audit
 
-### 2.1 ✅ Strengths
+**Before fix:**
 
-#### 2.1.1 Process Isolation
-```typescript
-// src/main/window/manager.ts:181
-webPreferences: {
-  contextIsolation: true,
-  nodeIntegration: false,
-  sandbox: false, // Explicitly set
-}
 ```
-- **Context isolation enabled** - Prevents DOM exposure to Node.js APIs
-- **Node integration disabled** - Renderer cannot execute Node code directly
-- **Preload script bridge** - All IPC goes through controlled `contextBridge`
-
-#### 2.1.2 Gateway Request Authentication
-```typescript
-// src/main/security/gateway-request-auth.ts
-const LOOPBACK_GATEWAY_HOSTS = new Set(['127.0.0.1', 'localhost', '::1'])
-const GATEWAY_REQUEST_PROTOCOLS = new Set(['http:', 'https:', 'ws:', 'wss:'])
+$ pnpm audit --prod
+3 vulnerabilities found (2 low, 1 moderate)
+  - GHSA-cmwh-pvxp-8882  dompurify <=3.4.10  (via monaco-editor)
+  - GHSA-c2j3-45gr-mqc4  dompurify <=3.4.11  (via monaco-editor)
+  - GHSA-vxr8-fq34-vvx9  dompurify <3.4.9    (via monaco-editor)
 ```
-- Whitelist-only host validation
-- Protocol filtering
-- Port matching prevents DNS rebinding attacks
 
-#### 2.1.3 CSP Handling for Embedded Control UI
-```typescript
-// src/main/security/gateway-response-headers.ts
-export const RELAXED_GATEWAY_FRAME_ANCESTORS =
-  "frame-ancestors 'self' file: openclaw-shell://renderer http://localhost:* ..."
+`monaco-editor@0.56.0` (the latest published version — confirmed via `npm view monaco-editor version`) depends directly on the vulnerable `dompurify@3.4.8`; there is no newer `monaco-editor` release to bump to. **Fix applied:** added a `pnpm.overrides` entry pinning `dompurify` to `^3.4.13` (latest patched release) in `package.json`, then reinstalled.
+
+**After fix:**
+
 ```
-- Properly relaxes X-Frame-Options for legitimate embedding
-- Blocks non-loopback origins
-- Adds missing directives (`worker-src`, `connect-src`)
-
-#### 2.1.4 Safe Workspace Import
-```typescript
-// src/main/workspace/workspace-memory.ts
-const PACK_FILES = Object.freeze([
-  'SOUL.md', 'MEMORY.md', 'HEARTBEAT.md', 'IDENTITY.md', ...
-])
-
-function safePackName(name: string): string | null {
-  if (normalized.includes('..') || normalized.startsWith('/')) return null
-  if (!PACK_FILES.includes(normalized)) return null
-  return normalized
-}
+$ pnpm audit --prod
+No known vulnerabilities found
 ```
-- Allowlist-based extraction (not recursive unzip)
-- Parent directory traversal prevention
-- Path normalization before validation
 
-### 2.2 ⚠️ Areas for Improvement
+`pnpm run type-check` was re-run after the override and remains clean, confirming the forced `dompurify` bump did not break the Monaco integration's TypeScript surface.
 
-#### 2.2.1 `'unsafe-inline'` in CSP
-```typescript
-// src/main/security/gateway-response-headers.ts:70
-extras.push("style-src 'self' 'unsafe-inline'")
-```
-**Risk:** Low-Medium - Could allow XSS if untrusted CSS is loaded
+### 2.1 Version drift worth tracking (informational only)
 
-**Recommendation:** 
-- Use Content-Security-Policy nonce or hash mechanism for inline styles
-- Alternatively, extract inline styles to external stylesheet
-
-#### 2.2.2 Token-in-URL Pattern
-```typescript
-// src/main/security/gateway-request-auth.ts
-url.searchParams.set('token', token)
-```
-**Risk:** Medium - Tokens in URLs can be logged in browser history, server logs, Referer header
-
-**Recommendation:**
-- Consider using Authorization header instead for sensitive operations
-- If URL params required, ensure HTTPS-only transmission and short expiry
-
-#### 2.2.3 Missing Input Validation on User Paths
-```typescript
-// src/main/wizard/model-settings-load.js (referenced but not audited)
-```
-**Risk:** Potential path injection if user-provided paths not validated
-
-**Recommendation:** Ensure all workspace/user paths go through sanitization
-
-### 2.3 🔒 Sensitive Data Handling
-
-| Asset | Location | Protection Level |
-|-------|----------|------------------|
-| API Keys | `auth-profiles.json` | Encrypted? Not documented |
-| Pairing Codes | Local filesystem | Temporary, session-scoped |
-| Gateway Token | Config file | Optional auth, not encrypted at rest |
-
-**Recommendation:** Document encryption strategy for credential storage (keytar, DPAPI, etc.)
+| Package | Pinned | Latest on npm | Notes |
+|---|---|---|---|
+| `electron` | `^41.0.0` | `43.3.0` | Two majors behind, same gap as `openclaw-desktop-plus`. Plan a dedicated upgrade pass. |
+| `monaco-editor` | `^0.56.0` | `0.56.0` | Already latest. |
 
 ---
 
-## 3. Code Quality Analysis
+## 3. Version Consistency & Build Health
 
-### 3.1 Recent Changes (Git Diff Summary)
-
-**Modified Files:** 18  
-**New Features:** Device Pairing System
-
-#### New Feature: Device Pairing
-```typescript
-// src/shared/ipc-channels.ts
-export const IPC_DEVICE_PAIRING_LIST = 'devicePairing:list' as const
-export const IPC_DEVICE_PAIRING_APPROVE = 'devicePairing:approve' as const
-```
-
-**Implementation Scope:**
-- ✅ New IPC handlers in `src/main/ipc/handlers.ts`
-- ✅ Preload bridge in `src/preload/index.ts`
-- ✅ Type definitions in `src/shared/types.ts`
-- ✅ UI integration in `App.tsx` and `EmbeddedShellLayout.tsx`
-- ⚠️ No dedicated test file yet
-
-#### Configuration Migration Enhancements
-```typescript
-// src/main/config/openclaw-config.ts
-function migrateMinimaxAuthHeaderToXApiKey(...)
-function migrateAnthropicThirdPartyAuthHeader(...)
-function migrateAgentToolsDefaults(...)
-```
-- Automatic migration of deprecated config formats
-- MiniMax API compatibility fixes
-- Default tool enablement for agents
-
-### 3.2 Test Coverage
-
-| Test File | Coverage Area | Status |
-|-----------|---------------|--------|
-| `usage-insights.test.ts` | Session data aggregation | ✅ Good |
-| `workspace-memory.test.ts` | Preferences/Memory export | ✅ Good |
-| `model-health-signal.test.ts` | Health pattern detection | ✅ Basic |
-| `gateway-remote.test.ts` | Remote gateway logic | ✅ Present |
-| `control-ui-flags.test.ts` | Embedded UI flags | ✅ Present |
-| `model-ref.test.ts` | Model ID normalization | ✅ Present |
-
-**Gaps:**
-- ❌ No device pairing tests
-- ❌ Limited IPC handler tests
-- ❌ No E2E/smoke tests beyond gateway status checks
-- ❌ No security regression tests
-
-### 3.3 Type Safety
-
-```typescript
-// Strict type usage throughout
-type ModelHealthSignal =
-  | { kind: 'failover'; detail: string }
-  | { kind: 'primary_down'; detail: string }
-  | { kind: 'rate_limited'; detail: string }
-  | null
-```
-- ✅ Discriminated unions for state machines
-- ✅ Generic-safe patterns
-- ✅ TypeScript strict mode apparent from code style
+- `pnpm exec tsx scripts/check-openclaw-versions.ts` → **OK**, pin/manifest aligned (see §1).
+- `pnpm run type-check` → **clean**.
+- `resources/bundle-manifest.json` (`shellVersion: 0.1.1+deskclaw.2026.7.1`, `bundledOpenClawVersion: 2026.7.1-2`) matches `package.json`.
 
 ---
 
-## 4. Build & Packaging
+## 4. Code Quality & Architecture
 
-### 4.1 Packaging Configuration
+### 4.1 Structure
 
-```javascript
-// electron-builder.config.cjs
-module.exports = {
-  appId: 'com.openclaw.desktop-plus',
-  productName: 'OpenClaw Desktop Plus',
-  asar: true,
-  asarUnpack: ['out/renderer/**', 'out/preload/**'],
-  win: {
-    target: [{ target: 'nsis', arch: ['x64'] }],
-    signExts: ['exe', 'dll'],
-  },
-}
-```
+| Module | Purpose |
+|--------|---------|
+| `src/main/agent/` | Agent orchestration bridging to the OpenClaw gateway |
+| `src/main/editor/` | File service, project/workspace file I/O for Monaco |
+| `src/main/gateway/`, `src/main/config/` | OpenClaw gateway process + config handling (shared lineage with `openclaw-desktop-plus`) |
+| `src/main/security/`, `src/main/window/` | Electron hardening (context isolation, sandboxed preload) |
+| `src/renderer/editor/` | Monaco integration, editor layout |
+| `src/renderer/shell/`, `src/renderer/components/` | VS Code-style shell chrome, panels (Git, Terminal, Problems, Skills marketplace, etc.) |
 
-**Strengths:**
-- ✅ ASAR packing reduces bundle size
-- ✅ Renderer unpacked for file:// protocol access
-- ✅ NSIS installer with multi-language support
-- ✅ Auto-updater integration (`electron-updater`)
+`src/main/window/manager.ts` confirms `contextIsolation: true`, `nodeIntegration: false`, `sandbox: false` (explicit), consistent with the sibling desktop-shell repo's security posture.
 
-**Configuration Notes:**
-```bash
-# Unsigned builds (for development)
-pnpm run package:win
+### 4.2 Test Coverage
 
-# Signed builds (requires CSC_LINK env var)
-pnpm run package:win:signed
-```
+| Test File | Coverage Area |
+|-----------|---------------|
+| `src/main/config/control-ui-flags.test.ts` | Embedded UI flags |
+| `src/main/config/openclaw-config.test.ts` | Gateway config read/migrate |
+| `src/main/editor/file-service.test.ts` | Editor file service |
+| `src/main/insights/usage-insights.test.ts` | Session data aggregation |
+| `src/main/models/model-ref.test.ts` | Model ID normalization |
+| `src/main/workspace/workspace-memory.test.ts` | Preferences/memory export |
+| `src/renderer/editor/explorer-layout.test.ts` | Renderer explorer layout |
+| `src/shared/gateway-remote.test.ts` | Remote gateway logic |
+| `src/shared/model-health-signal.test.ts` | Health pattern detection |
 
-### 4.2 Version Management
-
-| Component | Pinning Strategy | Current |
-|-----------|------------------|---------|
-| Electron | Exact (^41.0.0) | 41.x |
-| React | Exact (^19.0.0) | 19.x |
-| OpenClaw Gateway | Bundle manifest | 2026.7.1-2 |
-| Node.js | Bundled portable | 22.23.1 |
-
-**Best Practice:** Bundle-specific versions prevent runtime drift
-
-### 4.3 CI/CD Pipeline
-
-**Available Scripts:**
-```json
-{
-  "package:prepare-deps": "Download Node + OpenClaw bundles",
-  "verify-bundle": "Check bundled resources completeness",
-  "smoke:csp": "Validate gateway CSP headers",
-  "smoke:gateway": "Test gateway process lifecycle"
-}
-```
-
-**Smoke Tests:**
-- ✅ CSP header validation
-- ✅ Gateway process management
-- ⚠️ No automated release tests found
+**Gap:** the flagship AI-native surfaces called out in the README — inline `Ctrl+K` edit, AI commit-message generation (`GitPanel.tsx`), AI error-fixer (`ProblemsPanel.tsx`), ClawHub marketplace install flow — have no dedicated unit tests. These are the editor's differentiators and the highest-value place to add coverage next.
 
 ---
 
-## 5. Documentation Audit
+## 5. Recommendations
 
-### 5.1 Documentation Completeness
+### High priority
+- None outstanding from a security standpoint after the `dompurify` override — `pnpm audit --prod` is clean and the OpenClaw pin is aligned.
 
-| Doc | Status | Coverage |
-|-----|--------|----------|
-| `README.md` | ✅ Excellent | Product overview, architecture, FAQ |
-| `CHANGELOG.md` | ✅ Active | Last update: 2026-07-25 |
-| `SECURITY.md` | ✅ Present | Vulnerability reporting流程 |
-| `CONTRIBUTING.md` | ✅ Present | Development guidelines |
-| `docs/DEVELOPMENT.md` | ✅ Present | Local setup instructions |
-| `docs/PACKAGING.md` | ✅ Present | Build process guide |
-| `ZCODE.md` | ✅ Custom | Windows-specific tooling notes |
+### Medium priority
+- Add unit/integration tests for the AI-native panels (Inline Edit, AI Commit Message, AI Error Fixer, ClawHub install) — currently untested despite being the product's flagship features.
+- Plan a dedicated Electron 41 → 43 upgrade pass (shared concern with `openclaw-desktop-plus`).
 
-### 5.2 In-Code Documentation
-
-**Quality Indicators:**
-- ✅ JSDoc comments on public functions
-- ✅ Inline explanations for complex migrations
-- ✅ TypeScript type annotations clear and complete
-
-**Example:**
-```typescript
-/**
- * Read OpenClaw main config.
- * - Missing file → {}
- * - Parse error → {} + warning
- */
-export function readOpenClawConfig(): OpenClawConfig {
-```
+### Low priority / watch list
+- Re-run `pnpm run check-openclaw-versions -- --align-latest` once OpenClaw `2026.7.2` promotes off `beta`, particularly for its coding-agent/`attach` improvements relevant to this editor's chat panel.
+- Keep `AUDIT_REPORT.md` scoped to this repository going forward (this pass fixes a prior copy-paste from `openclaw-desktop-plus`).
 
 ---
 
-## 6. Issues & Recommendations
+## 6. Conclusion
 
-### 6.1 High Priority
-
-#### #6.1.1 Add Device Pairing Tests
-**Issue:** New pairing feature lacks test coverage  
-**Impact:** Regression risk during future changes  
-**Recommendation:** Create `device-pairing.test.ts` mocking `GatewayRpcClient`
-
-#### #6.1.2 Document Credential Encryption
-**Issue:** No documentation on how API keys are stored/encrypted  
-**Impact:** Security audit gap, user trust issue  
-**Recommendation:** Add section to `SECURITY.md` explaining `auth-profiles.json` protection
-
-#### #6.1.3 Add Integration Tests
-**Issue:** Only unit-level tests exist  
-**Impact:** Cannot catch integration bugs between modules  
-**Recommendation:** Implement vitest-based integration tests for IPC flow
-
-### 6.2 Medium Priority
-
-#### #6.2.1 Refactor `'unsafe-inline'` CSP
-**Issue:** Inline styles bypass CSP protections  
-**Impact:** Potential XSS vector if combined with other weaknesses  
-**Recommendation:** Migrate to nonce-based inline script/style injection
-
-#### #6.2.2 Standardize Error Handling
-**Issue:** Mixed use of try/catch and error propagation  
-**Impact:** Some errors may not be properly logged or surfaced  
-**Recommendation:** Define central error handling middleware for IPC handlers
-
-#### #6.2.3 Add Resource Leak Monitoring
-**Issue:** Long-running Electron app, no visible leak tracking  
-**Impact:** Memory growth over time possible  
-**Recommendation:** Add periodic memory stats logging via Electron DevTools protocol
-
-### 6.3 Low Priority
-
-#### #6.3.1 Improve Test Coverage Percentage
-**Target:** ≥ 70% line coverage  
-**Current:** ~30-40% (estimated)  
-**Method:** Use `vitest --coverage`
-
-#### #6.3.2 Add Visual Regression Tests
-**Target:** Catch UI regressions in critical flows  
-**Tool:** Percy, Chromatic, or Playwright screenshot comparisons
-
----
-
-## 7. Git Status Summary
-
-### 7.1 Uncommitted Changes
-
-```bash
-M src/main/config/openclaw-config.ts         # +36 lines (migrations)
-M src/main/ipc/handlers.ts                   # +48 lines (pairing)
-M src/preload/index.ts                       # +7 lines (bridge)
-M src/renderer/App.tsx                       # +5 lines (new panel)
-M src/renderer/shell/EmbeddedShellLayout.tsx # +1 line (panel type)
-M src/shared/electron-api.d.ts               # +4 lines (API types)
-M src/shared/ipc-channels.ts                 # +8 lines (channels)
-M src/shared/types.ts                        # +29 lines (pairing types)
-```
-
-**Net Impact:** ~135 additions, minimal deletions  
-**Change Type:** Feature addition (Device Pairing) + configuration enhancements
-
-### 7.2 Untracked Files
-
-| File | Status | Purpose |
-|------|--------|---------|
-| `.zcode/` | Untracked | Agent-generated workspace |
-| `ZCODE.md` | Untracked | Custom tooling instructions |
-| `scripts/safe-patch.mjs` | Untracked | Windows-friendly edit utility |
-| `src/renderer/shell/DevicePairingView.tsx` | Untracked | New UI component |
-| `*.bak`, `*.new*` | Untracked | Temporary backup files |
-
-**Cleanup Recommendation:** Remove backup files before finalizing release
-
----
-
-## 8. Conclusion
-
-### 8.1 Overall Grade: **B+ (Good)**
-
-| Dimension | Score | Justification |
-|-----------|-------|---------------|
-| Security | A- | Strong isolation, minor CSP concerns |
-| Code Quality | B+ | Well-typed, good doc, some test gaps |
-| Documentation | A | Comprehensive and current |
-| Maintainability | A- | Clear module boundaries, migrations work |
-| Testing | C+ | Present but incomplete |
-
-### 8.2 Next Steps
-
-1. **Immediate:** Review device pairing implementation PR before merge
-2. **Short-term:** Add missing tests, document credential encryption
-3. **Medium-term:** Increase test coverage to 70%, add integration tests
-4. **Long-term:** Automate visual regression testing, consider TypeScript strictness enforcement
-
-### 8.3 Security Posture
-
-The project implements **defense-in-depth** principles appropriately for a community desktop app:
-- Process isolation ✓
-- Input validation ✓
-- Origin verification ✓
-- Safe file extraction ✓
-
-**Critical Finding:** No evidence of security vulnerabilities in audited code. The main improvement area is documenting the encryption strategy for stored credentials.
-
----
+The OpenClaw bundle pin is **already current** with upstream's `latest` npm release (`2026.7.1-2`), verified against the npm registry and the project's own `check-openclaw-versions.ts` gate. One real dependency vulnerability chain (`dompurify` via `monaco-editor`) was found and fixed via a `pnpm.overrides` pin. No functional code changes were required for the OpenClaw version itself; this pass documents that currency and surfaces upcoming upstream features for planning purposes.
 
 **End of Audit Report**
-
-For questions or clarification, refer to specific sections above or request detailed code review of flagged areas.

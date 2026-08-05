@@ -2,6 +2,16 @@
 
 All notable changes to OpenClaw Desktop Plus will be documented in this file.
 
+## [Unreleased]
+
+### Audit
+
+- Re-verified the bundled OpenClaw version against the npm registry and the project's own `check-openclaw-versions.ts` gate: `openclawBundleVersion` (`2026.7.1-2`) already matches `openclaw@latest` as of 2026-08-05 — no bundle version bump needed.
+
+### Fixed
+
+- **Security:** `pnpm audit --prod` surfaced 3 advisories (2 low, 1 moderate) for `dompurify` pulled in transitively by `monaco-editor@0.56.0` (the latest published `monaco-editor`, which itself pins the vulnerable `dompurify@3.4.8`). Added a `pnpm.overrides` entry pinning `dompurify` to `^3.4.13` (patched); `pnpm audit --prod` and `pnpm run type-check` are clean after the fix. See `AUDIT_REPORT.md` for details, including upcoming upstream OpenClaw features tracked on the `beta` channel (`2026.7.2-beta.7`) for future adoption once promoted to stable.
+
 ## [0.10.0] - 2026-07-26
 
 ### Added
